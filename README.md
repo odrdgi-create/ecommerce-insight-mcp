@@ -1,4 +1,4 @@
-# E-Commerce Presentation & Insights MCP Server
+#  E-Commerce Presentation & Insights MCP Server
 
 **[English](#english) | [Türkçe](#türkçe)**
 
@@ -10,12 +10,12 @@ An MCP server for Claude Desktop that scrapes e-commerce product pages and categ
 
 A **Model Context Protocol (MCP)** server built with Python (`FastMCP`) that lets Claude Desktop scrape and clean e-commerce product and category pages into structured JSON, enabling Claude to build presentation slides, market analysis reports, and competitive product comparisons.
 
-### Features
+###  Features
 
 **1. `extract_product_presentation_data(url: str)`**
 Fetches a single product page and returns:
 - Page title (`<title>`)
-- Product images — up to 6 `<img>` tags whose `src` contains `cdn.dsmcdn.com`, `product`, `images`, or `mnresize`; protocol-relative URLs (`//...`) are normalized to `https:`
+- Up to 6 product images — detected first via `og:image`/`twitter:image` meta tags, falling back to `<img>` tags filtered by exclusion keywords (logo, icon, sprite, etc.) and minimum size; all URLs resolved with `urljoin`
 - Clean text with `script`, `style`, `header`, `footer`, `nav`, `noscript` tags stripped, lines shorter than 3 characters removed, capped at the first 150 lines
 
 **2. `get_category_presentation_data(url: str)`**
@@ -27,13 +27,15 @@ Both tools return `{"error": "Hata oluştu: ..."}` on failure instead of raising
 
 ###  Known Limitations
 
-This version is **still Trendyol-leaning** in one respect, though the URL handling is now generic:
-- The image filter relies on `cdn.dsmcdn.com` (Trendyol's CDN) — it may not find product images on other sites.
-- Relative links in `get_category_presentation_data` are resolved with Python's built-in `urllib.parse.urljoin(base_url, href)`, so they correctly resolve against **any** target domain, not just Trendyol.
+As of the latest update, this server is largely **platform-agnostic**:
+- Relative links in `get_category_presentation_data` are resolved with Python's built-in `urllib.parse.urljoin(base_url, href)`, so they correctly resolve against **any** target domain.
+- Product images are detected via `og:image` / `twitter:image` meta tags first (a standard nearly all e-commerce sites use), falling back to `<img>` tags filtered by exclusion keywords (logo, icon, sprite, etc.) and minimum size — not tied to any single CDN.
+- Product-link detection matches common patterns (`-p-`, `/product/`, `/urun/`, `-pm-`, `/p-`) used across Turkish and international e-commerce platforms.
+
+Remaining limitations:
 - Uses a single fixed `User-Agent`; sites with bot protection may reject requests.
 - No `robots.txt` check or rate limiting between requests.
-
-Adapt the image filter before relying on it for sites other than Trendyol.
+- Not yet tested against every major e-commerce platform — edge cases on unfamiliar sites are possible.
 
 ### Requirements
 
@@ -47,7 +49,7 @@ httpx
 beautifulsoup4
 ```
 
-###  Installation
+### Installation
 
 ```bash
 git clone https://github.com/odrdgi-create/ecommerce-insight-mcp.git
@@ -57,7 +59,7 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### ⚙️ Claude Desktop Setup
+### Claude Desktop Setup
 
 Add the following block to your Claude Desktop config file
 (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`,
@@ -123,13 +125,13 @@ ecommerce-insight-mcp/
 
 ### Roadmap (suggested)
 
-- [ ] Platform-agnostic image detection (currently keyed to Trendyol's CDN)
 - [x] Dynamic relative-URL resolution based on target domain (`urljoin`)
+- [x] Platform-agnostic image detection (`og:image` + filtered `<img>` fallback)
 - [ ] `robots.txt` compliance and request throttling
 - [ ] Unit tests
 - [ ] Pin dependency versions in `requirements.txt`
 
-###  License
+### License
 
 Not specified — consider adding an open-source license (e.g. MIT).
 
@@ -144,7 +146,7 @@ Python (`FastMCP`) ile yazılmış bir **Model Context Protocol (MCP)** sunucusu
 **1. `extract_product_presentation_data(url: str)`**
 Tek bir ürün sayfasını çeker ve şunları döndürür:
 - Sayfa başlığı (`<title>`)
-- Ürün görselleri — `cdn.dsmcdn.com`, `product`, `images`, `mnresize` gibi anahtar kelimeleri içeren `<img>` etiketlerinden en fazla 6 tanesi, protokolsüz (`//...`) linkler otomatik `https:` ile tamamlanır
+- En fazla 6 ürün görseli — önce `og:image`/`twitter:image` meta etiketlerinden tespit edilir, bulunamazsa dışlama anahtar kelimeleri (logo, icon, sprite vb.) ve minimum boyut filtresiyle `<img>` etiketlerine düşülür; tüm URL'ler `urljoin` ile çözümlenir
 - `script`, `style`, `header`, `footer`, `nav`, `noscript` etiketleri ayıklanmış, 3 karakterden uzun satırlarla sınırlı, ilk 150 satıra kırpılmış temiz metin
 
 **2. `get_category_presentation_data(url: str)`**
@@ -154,17 +156,19 @@ Bir kategori/liste sayfasını çeker ve şunları döndürür:
 
 Her iki tool da hata durumunda `{"error": "Hata oluştu: ..."}` formatında JSON döndürür, exception fırlatmaz.
 
-###  Bilinen Sınırlamalar
+### Bilinen Sınırlamalar
 
-Bu sürüm URL yönetimi tarafında artık genel amaçlı, ama görsel filtresi hâlâ **Trendyol'a özel**:
-- Görsel filtresi `cdn.dsmcdn.com` (Trendyol CDN'i) anahtar kelimesine dayanır — başka sitelerde ürün görseli bulamayabilir.
-- `get_category_presentation_data` içindeki relative linkler artık Python'un yerleşik `urllib.parse.urljoin(base_url, href)` fonksiyonuyla çözümlenir — bu sayede hangi hedef domain olursa olsun **doğru URL** üretilir, sadece Trendyol'a özel değildir.
+Son güncellemeyle birlikte bu sunucu artık büyük ölçüde **platform-bağımsız**:
+- `get_category_presentation_data` içindeki relative linkler Python'un yerleşik `urllib.parse.urljoin(base_url, href)` fonksiyonuyla çözümlenir — hangi hedef domain olursa olsun **doğru URL** üretilir.
+- Ürün görselleri önce `og:image` / `twitter:image` meta etiketlerinden tespit edilir (neredeyse tüm e-ticaret sitelerinin kullandığı standart bir yapı), bulunamazsa dışlama anahtar kelimeleri (logo, icon, sprite vb.) ve minimum boyut filtresiyle `<img>` etiketlerine düşülür — artık tek bir CDN'e bağlı değildir.
+- Ürün linki tespiti, hem Türkiye hem uluslararası e-ticaret platformlarında yaygın olan pattern'leri (`-p-`, `/product/`, `/urun/`, `-pm-`, `/p-`) kapsar.
+
+Kalan sınırlamalar:
 - Tek bir sabit `User-Agent` kullanılır; bot koruması olan sitelerde istek reddedilebilir.
 - `robots.txt` kontrolü veya istekler arası gecikme (rate limiting) yoktur.
+- Henüz her büyük e-ticaret platformunda test edilmedi — alışılmadık sitelerde uç durumlar (edge case) çıkabilir.
 
-Trendyol dışındaki sitelerde görsel filtresine güvenmeden önce onu uyarlamanız gerekir.
-
-###  Gereksinimler
+### Gereksinimler
 
 - Python 3.10+
 - [Claude Desktop](https://claude.ai/download)
@@ -176,7 +180,7 @@ httpx
 beautifulsoup4
 ```
 
-###  Kurulum
+### Kurulum
 
 ```bash
 git clone https://github.com/odrdgi-create/ecommerce-insight-mcp.git
@@ -186,7 +190,7 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-###  Claude Desktop Entegrasyonu
+### Claude Desktop Entegrasyonu
 
 Claude Desktop'ın konfigürasyon dosyasına (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`, Windows: `%APPDATA%\Claude\claude_desktop_config.json`) aşağıdaki bloğu ekleyin:
 
@@ -205,7 +209,7 @@ Claude Desktop'ın konfigürasyon dosyasına (macOS: `~/Library/Application Supp
 
 Dosyayı kaydedip Claude Desktop'ı yeniden başlatın. Araç çubuğunda "E-Commerce HTML Summarizer" sunucusunu görmelisiniz.
 
-###  Kullanım Örneği
+### Kullanım Örneği
 
 Claude'a şu şekilde bir istekte bulunabilirsiniz:
 
@@ -248,14 +252,14 @@ ecommerce-insight-mcp/
 └── README.md
 ```
 
-###  Yol Haritası (öneri)
+### Yol Haritası (öneri)
 
-- [ ] Platform-agnostik görsel tespiti (şu an Trendyol CDN'ine bağlı)
 - [x] Relative URL tamamlamayı hedef domain'e göre dinamikleştirme (`urljoin`)
+- [x] Platform-agnostik görsel tespiti (`og:image` + filtrelenmiş `<img>` fallback'i)
 - [ ] `robots.txt` kontrolü ve istekler arası gecikme
 - [ ] Birim testleri
 - [ ] `requirements.txt` içinde sürüm pinleme
 
-###  Lisans
+### Lisans
 
- MIT eklendi.
+Açık kaynak lisansı MIT eklenmiştir.
