@@ -25,7 +25,7 @@ Fetches a category/listing page and returns:
 
 Both tools return `{"error": "Hata oluştu: ..."}` on failure instead of raising an exception.
 
-###  Known Limitations
+### Known Limitations
 
 As of the latest update, this server is largely **platform-agnostic**:
 - Relative links in `get_category_presentation_data` are resolved with Python's built-in `urllib.parse.urljoin(base_url, href)`, so they correctly resolve against **any** target domain.
@@ -33,11 +33,11 @@ As of the latest update, this server is largely **platform-agnostic**:
 - Product-link detection matches common patterns (`-p-`, `/product/`, `/urun/`, `-pm-`, `/p-`) used across Turkish and international e-commerce platforms.
 
 Remaining limitations:
-- Uses a single fixed `User-Agent`; sites with bot protection may reject requests.
+- **Hepsiburada is not reliably supported.** It runs enterprise-grade bot protection that blocks both plain HTTP requests and a headless Playwright browser (with a randomized User-Agent, disabled automation flags, and a hidden `navigator.webdriver`) — the site returns a 200 OK "security check" page instead of product content either way. Tested and confirmed as of this writing; not expected to change without significantly more invasive evasion techniques, which this project intentionally does not pursue.
 - No `robots.txt` check or rate limiting between requests.
 - Not yet tested against every major e-commerce platform — edge cases on unfamiliar sites are possible.
 
-### Requirements
+###  Requirements
 
 - Python 3.10+
 - [Claude Desktop](https://claude.ai/download)
@@ -113,7 +113,7 @@ For a category page:
 }
 ```
 
-### Project Structure
+### 📁 Project Structure
 
 ```
 ecommerce-insight-mcp/
@@ -131,7 +131,7 @@ ecommerce-insight-mcp/
 - [ ] Unit tests
 - [ ] Pin dependency versions in `requirements.txt`
 
-### License
+###  License
 
 Not specified — consider adding an open-source license (e.g. MIT).
 
@@ -164,7 +164,7 @@ Son güncellemeyle birlikte bu sunucu artık büyük ölçüde **platform-bağı
 - Ürün linki tespiti, hem Türkiye hem uluslararası e-ticaret platformlarında yaygın olan pattern'leri (`-p-`, `/product/`, `/urun/`, `-pm-`, `/p-`) kapsar.
 
 Kalan sınırlamalar:
-- Tek bir sabit `User-Agent` kullanılır; bot koruması olan sitelerde istek reddedilebilir.
+- **Hepsiburada güvenilir şekilde desteklenmiyor.** Kurumsal seviyede bot koruması kullanıyor; bu koruma hem düz HTTP isteklerini hem de headless Playwright tarayıcısını (rastgele User-Agent, otomasyon bayrakları kapatılmış, `navigator.webdriver` gizlenmiş halde) engelliyor — site her durumda ürün içeriği yerine 200 OK statüsüyle bir "güvenlik kontrolü" sayfası döndürüyor. Bu yazı itibarıyla test edilip doğrulanmıştır; çok daha agresif atlatma teknikleri olmadan değişmesi beklenmiyor — bu proje bilinçli olarak o yönde ilerlemiyor.
 - `robots.txt` kontrolü veya istekler arası gecikme (rate limiting) yoktur.
 - Henüz her büyük e-ticaret platformunda test edilmedi — alışılmadık sitelerde uç durumlar (edge case) çıkabilir.
 
@@ -262,4 +262,4 @@ ecommerce-insight-mcp/
 
 ### Lisans
 
-Açık kaynak lisansı MIT eklenmiştir.
+Belirtilmemiş — bir açık kaynak lisansı (örn. MIT) eklemeniz önerilir.
