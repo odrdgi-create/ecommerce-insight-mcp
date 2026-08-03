@@ -10,7 +10,7 @@ An MCP server for Claude Desktop that scrapes e-commerce product pages and categ
 
 A **Model Context Protocol (MCP)** server built with Python (`FastMCP`) that lets Claude Desktop scrape and clean e-commerce product and category pages into structured JSON, enabling Claude to build presentation slides, market analysis reports, and competitive product comparisons.
 
-###  Features
+### Features
 
 **1. `extract_product_presentation_data(url: str)`**
 Fetches a single product page and returns:
@@ -25,15 +25,15 @@ Fetches a category/listing page and returns:
 
 Both tools return `{"error": "Hata oluştu: ..."}` on failure instead of raising an exception.
 
-### Known Limitations
+###  Known Limitations
 
-This version is **optimized for Trendyol**, not a generic e-commerce scraper:
+This version is **still Trendyol-leaning** in one respect, though the URL handling is now generic:
 - The image filter relies on `cdn.dsmcdn.com` (Trendyol's CDN) — it may not find product images on other sites.
-- Relative (`/`-prefixed) links in `get_category_presentation_data` are hardcoded to resolve against `https://www.trendyol.com{href}` — this will produce **incorrect URLs** on other sites.
+- Relative links in `get_category_presentation_data` are resolved with Python's built-in `urllib.parse.urljoin(base_url, href)`, so they correctly resolve against **any** target domain, not just Trendyol.
 - Uses a single fixed `User-Agent`; sites with bot protection may reject requests.
 - No `robots.txt` check or rate limiting between requests.
 
-Adapt these parts before using it on Hepsiburada or other platforms.
+Adapt the image filter before relying on it for sites other than Trendyol.
 
 ### Requirements
 
@@ -47,7 +47,7 @@ httpx
 beautifulsoup4
 ```
 
-### Installation
+###  Installation
 
 ```bash
 git clone https://github.com/odrdgi-create/ecommerce-insight-mcp.git
@@ -57,7 +57,7 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### Claude Desktop Setup
+### ⚙️ Claude Desktop Setup
 
 Add the following block to your Claude Desktop config file
 (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`,
@@ -123,13 +123,13 @@ ecommerce-insight-mcp/
 
 ### Roadmap (suggested)
 
-- [ ] Platform-agnostic scraping (separate parsers for Hepsiburada, N11, etc.)
-- [ ] Dynamic relative-URL resolution based on target domain
+- [ ] Platform-agnostic image detection (currently keyed to Trendyol's CDN)
+- [x] Dynamic relative-URL resolution based on target domain (`urljoin`)
 - [ ] `robots.txt` compliance and request throttling
 - [ ] Unit tests
 - [ ] Pin dependency versions in `requirements.txt`
 
-### License
+###  License
 
 Not specified — consider adding an open-source license (e.g. MIT).
 
@@ -139,7 +139,7 @@ Not specified — consider adding an open-source license (e.g. MIT).
 
 Python (`FastMCP`) ile yazılmış bir **Model Context Protocol (MCP)** sunucusu. Claude Desktop'ın e-ticaret ürün ve kategori sayfalarındaki ham HTML'i temizleyip yapılandırılmış JSON verisine dönüştürmesini sağlar; bu sayede Claude sunum slaytları, pazar analizi raporları ve rakip ürün karşılaştırmaları üretebilir.
 
-###  Özellikler
+### Özellikler
 
 **1. `extract_product_presentation_data(url: str)`**
 Tek bir ürün sayfasını çeker ve şunları döndürür:
@@ -154,17 +154,17 @@ Bir kategori/liste sayfasını çeker ve şunları döndürür:
 
 Her iki tool da hata durumunda `{"error": "Hata oluştu: ..."}` formatında JSON döndürür, exception fırlatmaz.
 
-### Bilinen Sınırlamalar
+###  Bilinen Sınırlamalar
 
-Bu sürüm **Trendyol'a göre optimize edilmiştir**, genel bir e-ticaret scraper'ı değildir:
+Bu sürüm URL yönetimi tarafında artık genel amaçlı, ama görsel filtresi hâlâ **Trendyol'a özel**:
 - Görsel filtresi `cdn.dsmcdn.com` (Trendyol CDN'i) anahtar kelimesine dayanır — başka sitelerde ürün görseli bulamayabilir.
-- `get_category_presentation_data` içinde relative (`/` ile başlayan) linkler otomatik olarak `https://www.trendyol.com{href}` ile tamamlanır — başka bir sitede relative link gelirse **hatalı URL üretir**.
+- `get_category_presentation_data` içindeki relative linkler artık Python'un yerleşik `urllib.parse.urljoin(base_url, href)` fonksiyonuyla çözümlenir — bu sayede hangi hedef domain olursa olsun **doğru URL** üretilir, sadece Trendyol'a özel değildir.
 - Tek bir sabit `User-Agent` kullanılır; bot koruması olan sitelerde istek reddedilebilir.
 - `robots.txt` kontrolü veya istekler arası gecikme (rate limiting) yoktur.
 
-Hepsiburada veya diğer platformlarda kullanmadan önce bu kısımları platforma göre uyarlamanız gerekir.
+Trendyol dışındaki sitelerde görsel filtresine güvenmeden önce onu uyarlamanız gerekir.
 
-### Gereksinimler
+###  Gereksinimler
 
 - Python 3.10+
 - [Claude Desktop](https://claude.ai/download)
@@ -176,7 +176,7 @@ httpx
 beautifulsoup4
 ```
 
-### Kurulum
+###  Kurulum
 
 ```bash
 git clone https://github.com/odrdgi-create/ecommerce-insight-mcp.git
@@ -186,7 +186,7 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### Claude Desktop Entegrasyonu
+###  Claude Desktop Entegrasyonu
 
 Claude Desktop'ın konfigürasyon dosyasına (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`, Windows: `%APPDATA%\Claude\claude_desktop_config.json`) aşağıdaki bloğu ekleyin:
 
@@ -205,7 +205,7 @@ Claude Desktop'ın konfigürasyon dosyasına (macOS: `~/Library/Application Supp
 
 Dosyayı kaydedip Claude Desktop'ı yeniden başlatın. Araç çubuğunda "E-Commerce HTML Summarizer" sunucusunu görmelisiniz.
 
-### Kullanım Örneği
+###  Kullanım Örneği
 
 Claude'a şu şekilde bir istekte bulunabilirsiniz:
 
@@ -248,14 +248,14 @@ ecommerce-insight-mcp/
 └── README.md
 ```
 
-### Yol Haritası (öneri)
+###  Yol Haritası (öneri)
 
-- [ ] Platform-agnostik hale getirme (Hepsiburada, N11 vb. için ayrı parser'lar)
-- [ ] Relative URL tamamlamayı hedef domain'e göre dinamikleştirme
+- [ ] Platform-agnostik görsel tespiti (şu an Trendyol CDN'ine bağlı)
+- [x] Relative URL tamamlamayı hedef domain'e göre dinamikleştirme (`urljoin`)
 - [ ] `robots.txt` kontrolü ve istekler arası gecikme
 - [ ] Birim testleri
 - [ ] `requirements.txt` içinde sürüm pinleme
 
-### Lisans
+###  Lisans
 
-Belirtilmemiş — bir açık kaynak lisansı (örn. MIT) eklemeniz önerilir.
+ MIT eklendi.
