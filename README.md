@@ -1,4 +1,4 @@
-#  E-Commerce Presentation & Insights MCP Server
+# E-Commerce Presentation & Insights MCP Server
 
 **[English](#english) | [Türkçe](#türkçe)**
 
@@ -10,7 +10,7 @@ An MCP server for Claude Desktop that scrapes e-commerce product pages and categ
 
 A **Model Context Protocol (MCP)** server built with Python (`FastMCP`) that lets Claude Desktop scrape and clean e-commerce product and category pages into structured JSON, enabling Claude to build presentation slides, market analysis reports, and competitive product comparisons.
 
-###  Features
+### Features
 
 **1. `extract_product_presentation_data(url: str)`**
 Fetches a single product page and returns:
@@ -18,12 +18,29 @@ Fetches a single product page and returns:
 - Up to 6 product images — detected first via `og:image`/`twitter:image` meta tags, falling back to `<img>` tags filtered by exclusion keywords (logo, icon, sprite, etc.) and minimum size; all URLs resolved with `urljoin`
 - Clean text with `script`, `style`, `header`, `footer`, `nav`, `noscript` tags stripped, lines shorter than 3 characters removed, capped at the first 150 lines
 
-**2. `get_category_presentation_data(url: str)`**
+**2. `extract_structured_product_schema(url: str)`**
+Extracts machine-readable structured data instead of freeform text:
+- All `<script type="application/ld+json">` blocks, parsed into JSON (this is the same schema.org `Product` data Google uses for rich snippets — reliable price, stock, brand, and rating fields when the site provides it)
+- All `og:*` and `product:*` OpenGraph meta tags as a flat key-value map
+
+Useful when you need exact, structured fields (price, SKU, availability) rather than a text summary — most modern e-commerce platforms (Shopify, Trendyol, WooCommerce, etc.) publish this data even when they don't want to be scraped in other ways.
+
+**3. `get_category_presentation_data(url: str)`**
 Fetches a category/listing page and returns:
 - Page title
-- Up to 8 unique products from links whose `href` contains `-p-` or `/product/`, with link text longer than 10 characters (name + full URL)
+- Up to 8 unique products from links whose `href` contains `-p-`, `/product/`, `/urun/`, `-pm-`, or `/p-`, with link text longer than 10 characters (name + full URL)
 
-Both tools return `{"error": "Hata oluştu: ..."}` on failure instead of raising an exception.
+All three tools return `{"error": "Hata oluştu: ..."}` on failure instead of raising an exception.
+
+### Fetch Strategy
+
+Every tool goes through a shared two-stage fetch (`_fetch_soup`):
+1. **Fast path** — a plain `httpx` request.
+2. **Fallback path** — if the fast path returns a blocking status code (`403`/`429`/`503`), *or* returns `200 OK` with a page that looks like a bot-check (title/body matching patterns like "security check", "captcha", "verify you are human", or suspiciously short content — see `_looks_blocked`), the tool retries with a headless Playwright browser (randomized viewport, `tr-TR` locale, hidden `navigator.webdriver` flag).
+
+This is enough to handle most JS-rendering and basic bot-detection cases, but it is not a stealth/evasion toolkit — see Known Limitations below for what it doesn't get past.
+
+Error handling is centralized in a `@handle_fetch_errors` decorator wrapping all three tools, so each tool function only contains its own parsing logic — no repeated `try/except` blocks. Timeouts, HTTP errors, connection errors, and missing Playwright are each caught once and turned into a consistent `{"error": "..."}` JSON response.
 
 ### Known Limitations
 
@@ -37,7 +54,7 @@ Remaining limitations:
 - No `robots.txt` check or rate limiting between requests.
 - Not yet tested against every major e-commerce platform — edge cases on unfamiliar sites are possible.
 
-###  Requirements
+### Requirements
 
 - Python 3.10+
 - [Claude Desktop](https://claude.ai/download)
@@ -47,6 +64,12 @@ Dependencies (`requirements.txt`):
 fastmcp
 httpx
 beautifulsoup4
+playwright
+```
+
+After installing, download the Playwright browser binary once:
+```bash
+playwright install chromium
 ```
 
 ### Installation
@@ -113,7 +136,13 @@ For a category page:
 }
 ```
 
-### 📁 Project Structure
+For exact structured fields:
+
+> "Get me the exact price and stock status for this product: https://www.trendyol.com/..."
+
+Claude calls `extract_structured_product_schema` and receives the site's raw JSON-LD and OpenGraph data, from which it can read fields like price, currency, and availability directly.
+
+### Project Structure
 
 ```
 ecommerce-insight-mcp/
@@ -127,11 +156,14 @@ ecommerce-insight-mcp/
 
 - [x] Dynamic relative-URL resolution based on target domain (`urljoin`)
 - [x] Platform-agnostic image detection (`og:image` + filtered `<img>` fallback)
+- [x] Structured data extraction (JSON-LD + OpenGraph) via `extract_structured_product_schema`
+- [x] Playwright fallback for JS-rendered / bot-checked pages, with soft-block (200 OK block page) detection
+- [x] Centralized error handling via a `@handle_fetch_errors` decorator (removed repeated try/except blocks)
 - [ ] `robots.txt` compliance and request throttling
 - [ ] Unit tests
 - [ ] Pin dependency versions in `requirements.txt`
 
-###  License
+### License
 
 Not specified — consider adding an open-source license (e.g. MIT).
 
@@ -149,12 +181,29 @@ Tek bir ürün sayfasını çeker ve şunları döndürür:
 - En fazla 6 ürün görseli — önce `og:image`/`twitter:image` meta etiketlerinden tespit edilir, bulunamazsa dışlama anahtar kelimeleri (logo, icon, sprite vb.) ve minimum boyut filtresiyle `<img>` etiketlerine düşülür; tüm URL'ler `urljoin` ile çözümlenir
 - `script`, `style`, `header`, `footer`, `nav`, `noscript` etiketleri ayıklanmış, 3 karakterden uzun satırlarla sınırlı, ilk 150 satıra kırpılmış temiz metin
 
-**2. `get_category_presentation_data(url: str)`**
+**2. `extract_structured_product_schema(url: str)`**
+Serbest metin yerine makine tarafından okunabilir yapısal veri çeker:
+- Tüm `<script type="application/ld+json">` bloklarını JSON'a çevirir (bu, Google'ın zengin snippet'ler için kullandığı aynı schema.org `Product` verisidir — site sağladığında güvenilir fiyat, stok, marka ve puan alanları verir)
+- Tüm `og:*` ve `product:*` OpenGraph meta etiketlerini düz bir key-value haritası olarak döndürür
+
+Metin özeti yerine kesin, yapılandırılmış alanlara (fiyat, SKU, stok durumu) ihtiyacın olduğunda kullanışlıdır — çoğu modern e-ticaret platformu (Shopify, Trendyol, WooCommerce vb.) diğer scraping yollarını engellese bile bu veriyi yayınlar.
+
+**3. `get_category_presentation_data(url: str)`**
 Bir kategori/liste sayfasını çeker ve şunları döndürür:
 - Sayfa başlığı
-- `href` içinde `-p-` veya `/product/` geçen linklerden, metni 10 karakterden uzun olan ve tekrar etmeyen ilk 8 ürün (isim + tam URL)
+- `href` içinde `-p-`, `/product/`, `/urun/`, `-pm-` veya `/p-` geçen linklerden, metni 10 karakterden uzun olan ve tekrar etmeyen ilk 8 ürün (isim + tam URL)
 
-Her iki tool da hata durumunda `{"error": "Hata oluştu: ..."}` formatında JSON döndürür, exception fırlatmaz.
+Üç tool da hata durumunda `{"error": "Hata oluştu: ..."}` formatında JSON döndürür, exception fırlatmaz.
+
+### Veri Çekme Stratejisi
+
+Her tool ortak, iki aşamalı bir çekme mekanizmasından (`_fetch_soup`) geçer:
+1. **Hızlı yol** — düz bir `httpx` isteği.
+2. **Yedek yol** — hızlı yol engelleyici bir statü kodu (`403`/`429`/`503`) döndürürse *veya* `200 OK` ile birlikte bot-kontrolüne benzeyen bir sayfa dönerse (başlık/gövdede "güvenlik kontrolü", "captcha", "robot değilsiniz" gibi ifadeler ya da şüpheli derecede kısa içerik — bkz. `_looks_blocked`), tool headless Playwright tarayıcısıyla (rastgele viewport, `tr-TR` dili, gizlenmiş `navigator.webdriver` bayrağı) tekrar dener.
+
+Bu, çoğu JS-render ve temel bot-tespit durumunu ele almaya yetiyor, ama bir stealth/atlatma araç seti değil — nelerin aşılamadığını aşağıdaki Bilinen Sınırlamalar'da görebilirsin.
+
+Hata yönetimi, üç tool'u da saran tek bir `@handle_fetch_errors` decorator'ında toplanmıştır — her tool fonksiyonu artık sadece kendi parse mantığını içerir, tekrar eden `try/except` blokları yoktur. Zaman aşımı, HTTP hataları, bağlantı hataları ve eksik Playwright kurulumu tek bir yerde yakalanır ve tutarlı bir `{"error": "..."}` JSON yanıtına çevrilir.
 
 ### Bilinen Sınırlamalar
 
@@ -178,9 +227,15 @@ Bağımlılıklar (`requirements.txt`):
 fastmcp
 httpx
 beautifulsoup4
+playwright
 ```
 
-### Kurulum
+Kurulumdan sonra Playwright'ın tarayıcı ikilisini bir kereliğine indirin:
+```bash
+playwright install chromium
+```
+
+###  Kurulum
 
 ```bash
 git clone https://github.com/odrdgi-create/ecommerce-insight-mcp.git
@@ -242,11 +297,17 @@ Kategori sayfası için:
 }
 ```
 
+Kesin yapısal alanlar için:
+
+> "Bu ürünün tam fiyatını ve stok durumunu getir: https://www.trendyol.com/..."
+
+Claude, `extract_structured_product_schema` tool'unu çağırır ve sitenin ham JSON-LD ile OpenGraph verisini alır, buradan fiyat, para birimi, stok durumu gibi alanları doğrudan okuyabilir.
+
 ### Proje Yapısı
 
 ```
 ecommerce-insight-mcp/
-├── ecommerce_mcp.py     # MCP sunucu ve iki tool tanımı
+├── ecommerce_mcp.py     # MCP sunucu ve üç tool tanımı
 ├── requirements.txt     # Python bağımlılıkları
 ├── .gitignore
 └── README.md
@@ -256,6 +317,9 @@ ecommerce-insight-mcp/
 
 - [x] Relative URL tamamlamayı hedef domain'e göre dinamikleştirme (`urljoin`)
 - [x] Platform-agnostik görsel tespiti (`og:image` + filtrelenmiş `<img>` fallback'i)
+- [x] Yapısal veri çıkarma (JSON-LD + OpenGraph) — `extract_structured_product_schema`
+- [x] JS-render'lı / bot-kontrollü sayfalar için Playwright yedek mekanizması, soft-block (200 OK engelleme sayfası) tespitiyle birlikte
+- [x] `@handle_fetch_errors` decorator'ı ile merkezi hata yönetimi (tekrar eden try/except blokları kaldırıldı)
 - [ ] `robots.txt` kontrolü ve istekler arası gecikme
 - [ ] Birim testleri
 - [ ] `requirements.txt` içinde sürüm pinleme
