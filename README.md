@@ -326,4 +326,4 @@ ecommerce-insight-mcp/
 
 ### Lisans
 
-Belirtilmemiş — bir açık kaynak lisansı (örn. MIT) eklemeniz önerilir.
+MIT eklendi.
