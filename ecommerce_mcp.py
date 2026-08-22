@@ -292,3 +292,4 @@ async def get_category_presentation_data(url: str) -> str:
 
 if __name__ == "__main__":
     mcp.run()
+    app = mcp.streamable_http_app()
