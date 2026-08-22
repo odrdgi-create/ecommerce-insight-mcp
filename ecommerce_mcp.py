@@ -290,6 +290,10 @@ async def get_category_presentation_data(url: str) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+# --- MCP TOOLS SONU ---
+
+# ASGI/HTTP Uygulamasını Global Düzeyde Tanımlama (Render/Uvicorn için)
+app = mcp.http_app()
+
 if __name__ == "__main__":
     mcp.run()
-    app = mcp.streamable_http_app()
