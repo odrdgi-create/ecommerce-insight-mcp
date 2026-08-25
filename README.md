@@ -1,5 +1,7 @@
 # E-Commerce Insight MCP
 
+**Türkçe** · 🇬🇧 [English](README.en.md)
+
 Ürün ve kategori sayfalarından sunum için veri çeken bir MCP sunucusu. Üç araç sunar:
 
 | Araç | Ne yapar |
@@ -7,6 +9,7 @@
 | `extract_product_presentation_data` | Ürün sayfasından başlık, görseller ve temizlenmiş metin |
 | `extract_structured_product_schema` | JSON-LD + OpenGraph: fiyat, stok, marka, puan |
 | `get_category_presentation_data` | Kategori sayfasından öne çıkan ürün listesi |
+| `extract_seller_trust_signals` | Satıcı puanı, kargoyu kimin yaptığı, iade durumu + gerekçeli karar özeti |
 
 Canlı sunucu: **https://ecommerce-insight-mcp.onrender.com**
 
@@ -30,6 +33,7 @@ Düz `GET` endpoint'leri, JSON döner. Handshake, session, SSE yok:
 curl "https://ecommerce-insight-mcp.onrender.com/api/product?url=https://ornek.com/urun"
 curl "https://ecommerce-insight-mcp.onrender.com/api/schema?url=https://ornek.com/urun"
 curl "https://ecommerce-insight-mcp.onrender.com/api/category?url=https://ornek.com/kategori"
+curl "https://ecommerce-insight-mcp.onrender.com/api/seller?url=https://ornek.com/urun"
 ```
 
 Sunucunun ayakta olup olmadığını kontrol etmek için:
@@ -101,7 +105,137 @@ HTTP sunucusu olarak çalıştırmak için:
 
 Ardından `http://localhost:8000` adresini açın.
 
-Araçları doğrudan test etmek için: `python test_local.py`
+---
+
+## Yerel test
+
+### En hızlı kontrol
+
+```bash
+.venv/bin/python -m uvicorn ecommerce_mcp:app --port 8000
+```
+
+Başka bir terminalde:
+
+```bash
+curl -s http://localhost:8000/health
+```
+
+`impersonate` ve `playwright` ikisi de `true` ise her şey hazır:
+
+```json
+{"status":"ok","impersonate":true,"playwright":true,"tools":["category","product","schema"]}
+```
+
+### Sunum çıktısı
+
+```bash
+curl -s "http://localhost:8000/api/product?url=<ÜRÜN_LİNKİ>" | python -m json.tool
+```
+
+`title`, `product_images` (en fazla 6 farklı fotoğraf) ve `extracted_content` döner.
+
+Fiyat, stok, marka ve puan için şema aracını kullanın:
+
+```bash
+curl -s "http://localhost:8000/api/schema?url=<ÜRÜN_LİNKİ>" | python -m json.tool
+```
+
+Her site şemasını `Product` diye etiketlemiyor — Trendyol örneğin `ProductGroup` kullanıyor ve fiyatları `hasVariant` altına koyuyor.
+
+Satıcı kararı için:
+
+```bash
+curl -s "http://localhost:8000/api/seller?url=<ÜRÜN_LİNKİ>" | python -m json.tool
+```
+
+### Tarayıcı formu
+
+`http://localhost:8000` adresini açın, linki yapıştırın, butona basın. Aynı veri, terminal yok.
+
+### Araçları doğrudan test etmek
+
+`python test_local.py` üç aracı da örnek linklerle çağırıp ham JSON'u basar.
+
+### Bulut ortamını taklit etmek
+
+Sunucunun Render'da nasıl davrandığını yerelde görmek için tarayıcı yedeğini kapatarak başlatın:
+
+```bash
+ENABLE_PLAYWRIGHT=0 .venv/bin/python -m uvicorn ecommerce_mcp:app --port 8000
+```
+
+### MCP protokolünü test etmek
+
+`/mcp` tam handshake ister. Elle doğrulamak için:
+
+```bash
+# 1. initialize — yanıt başlıklarındaki Mcp-Session-Id'yi not edin
+curl -i -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}'
+
+# 2. araçları listele (1. adımdaki session id'yi yapıştırın)
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Mcp-Session-Id: <SESSION_ID>" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+```
+
+---
+
+## Satıcı güven sinyalleri
+
+`extract_seller_trust_signals` aracı "hangi ürünü ve satıcıyı neden seçmeli" sorusunu gerekçelendirmek için tasarlandı. Ham alanların yanında `decision_summary` döndürür: **strengths** (kararı destekleyen), **concerns** (uyarı) ve **unknowns** (bilinemeyen).
+
+Trendyol örneği:
+
+```json
+{
+  "seller": {
+    "name": "SuperStep",
+    "official_name": "EREN PERAKENDE VE TEKSTİL ANONİM ŞİRKETİ",
+    "city": "İstanbul",
+    "score": 8.4, "score_scale": 10
+  },
+  "logistics": {
+    "fulfilled_by": "Satıcı kendi gönderiyor (pazaryeri)",
+    "refundable": true, "free_shipping": false, "max_installment": 12
+  },
+  "decision_summary": {
+    "strengths": ["Satıcı puanı 8.4/10 — iyi.", "Ürün iade edilebilir.", "629 favori — talep görüyor."],
+    "concerns": [
+      "Ürün puanı 5 ama yalnızca 1 yoruma dayanıyor — istatistiksel olarak zayıf.",
+      "Kargoyu satıcı kendi yapıyor — kargo ve iade süreci satıcının performansına bağlı.",
+      "Stok tükeniyor — fiyat ve bulunurluk değişebilir."
+    ]
+  }
+}
+```
+
+### Neyin ölçülebildiği, neyin ölçülemediği
+
+Kargo hasar/kayıp oranı, müşteri hizmetleri yanıt kalitesi ve iade taleplerinde ulaşılabilirlik **hiçbir pazaryerinde satıcı bazında yayınlanmıyor.** Bu yüzden çıktıda `unknowns` listesi var — sunumda "veri yok" ile "sorun yok" karışmasın diye.
+
+Bu üçünün yerine geçen iki gösterge var:
+
+- **`seller.score`** — platformun tam olarak bu faktörlerden hesapladığı bileşke puan.
+- **`logistics.fulfilled_by`** — kargoyu platform deposu mu yoksa satıcı mı yapıyor. Satıcı kendi gönderiyorsa kargo ve iade süreci tamamen o satıcının performansına bağlıdır; bu, kargo riskinin en iyi yayınlanan vekil göstergesidir.
+
+Ayrıca ürün puanı **her zaman yorum sayısıyla birlikte** değerlendirilir: 1 yoruma dayanan 5/5, 500 yoruma dayanan 4.3'ten zayıf bir sinyaldir.
+
+### Kaynak farkı
+
+`source` alanı verinin nereden geldiğini söyler:
+
+| Değer | Anlamı |
+|---|---|
+| `trendyol_embedded` | Trendyol'un sayfaya gömdüğü veri — yukarıdaki tüm alanlar dolu gelir |
+| `json_ld` | Siteden bağımsız JSON-LD `offers.seller` — genelde yalnızca satıcı adı |
+
+`json_ld` kaynağında alanların boş gelmesi **satıcının zayıf olduğu anlamına gelmez**, site o veriyi yayınlamıyor demektir. Hiç sinyal bulunamazsa `decision_summary.notes` bunu açıkça söyler.
 
 ---
 

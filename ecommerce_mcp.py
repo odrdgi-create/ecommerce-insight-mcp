@@ -285,6 +285,30 @@ async def _fetch_soup(url: str) -> tuple[BeautifulSoup, str | None]:
     return BeautifulSoup(html, "html.parser"), warning
 
 
+def _iter_schema_images(node, depth: int = 0):
+    """JSON-LD ağacındaki 'image' alanlarından görsel adreslerini toplar.
+
+    Şemalar bu alanı üç ayrı biçimde yazıyor: düz metin, metin listesi ya da
+    {"@type": "ImageObject", "contentUrl": ...} nesnesi. Ürün varyantları
+    (hasVariant) iç içe geçtiği için ağaç sınırlı derinlikte geziliyor.
+    """
+    if depth > 4:
+        return
+    if isinstance(node, str):
+        if node.startswith(("http://", "https://", "//")):
+            yield node
+    elif isinstance(node, list):
+        for item in node:
+            yield from _iter_schema_images(item, depth + 1)
+    elif isinstance(node, dict):
+        for key in ("image", "contentUrl", "primaryImageOfPage"):
+            if key in node:
+                yield from _iter_schema_images(node[key], depth + 1)
+        for key in ("hasVariant", "isRelatedTo", "@graph"):
+            if key in node:
+                yield from _iter_schema_images(node[key], depth + 1)
+
+
 def _extract_images(soup: BeautifulSoup, base_url: str, limit: int = 6) -> list[str]:
     images = []
 
@@ -295,10 +319,42 @@ def _extract_images(soup: BeautifulSoup, base_url: str, limit: int = 6) -> list[
             if src not in images:
                 images.append(src)
 
+    # JSON-LD, ürün fotoğraflarını taşıyan en güvenilir kaynak: <img> etiketlerinin
+    # aksine sayfa çerçevesine ait görsel içermez ve JS ile sonradan yüklenen
+    # kareler de burada hazır durur.
+    for script in soup.find_all("script", type="application/ld+json"):
+        if not script.string or len(script.string) > 100_000:
+            continue
+        try:
+            data = json.loads(script.string)
+        except json.JSONDecodeError:
+            continue
+        for src in _iter_schema_images(data):
+            src = urljoin(base_url, src)
+            if src not in images:
+                images.append(src)
+
     if len(images) >= limit:
         return images[:limit]
 
-    EXCLUDE_KEYWORDS = ["logo", "icon", "sprite", "placeholder", "avatar", "banner", "loading"]
+    EXCLUDE_KEYWORDS = [
+        "logo", "icon", "sprite", "placeholder", "avatar", "banner", "loading",
+        # Sayfa çerçevesine ait görseller: güven damgaları, footer/header afişleri.
+        "footer", "header", "stamp", "badge",
+    ]
+
+    def identity(src: str) -> str:
+        """Aynı fotoğrafın farklı boyutlarını tek sayar.
+
+        CDN'ler aynı görseli ölçü ön ekleriyle sunuyor (ör. Trendyol'da
+        .../mnresize/620/920/<yol> ile .../<yol> aynı fotoğraf). Yolun son iki
+        parçası (klasör + dosya adı) görselin gerçek kimliğini verir, bu yüzden
+        sunumda aynı kare üç kez görünmez.
+        """
+        segments = [seg for seg in urlparse(src).path.split("/") if seg]
+        return "/".join(segments[-2:])
+
+    seen = {identity(src) for src in images}
 
     for img in soup.find_all("img"):
         src = img.get("src") or img.get("data-src")
@@ -306,6 +362,11 @@ def _extract_images(soup: BeautifulSoup, base_url: str, limit: int = 6) -> list[
             continue
 
         src = urljoin(base_url, src)
+
+        # Ürün fotoğrafı hiçbir zaman SVG olmaz; SVG'ler arayüz ikonudur
+        # (arama, sepet, ok vb.) ve sunum çıktısını kirletiyorlar.
+        if src.lower().split("?")[0].endswith(".svg"):
+            continue
 
         if any(k in src.lower() for k in EXCLUDE_KEYWORDS):
             continue
@@ -320,13 +381,258 @@ def _extract_images(soup: BeautifulSoup, base_url: str, limit: int = 6) -> list[
         except ValueError:
             pass
 
-        if src not in images:
+        key = identity(src)
+        if key not in seen:
+            seen.add(key)
             images.append(src)
 
         if len(images) >= limit:
             break
 
     return images[:limit]
+
+
+# --- SATICI GÜVEN SİNYALLERİ ---
+
+# Trendyol'un ürün sayfasına gömdüğü durum nesnesi. Satıcı puanı, resmi unvan,
+# kargo tipi ve iade edilebilirlik gibi karar verdiren alanlar burada duruyor;
+# JSON-LD bunların hiçbirini taşımıyor.
+_TRENDYOL_STATE_MARKER = '__envoy__SHARED_PROPS'
+
+# Kargoyu kimin yaptığı, kargo/iade riskinin en iyi vekil göstergesi:
+# pazaryeri satıcısı kendi gönderiyorsa risk, platform deposundan çıkana göre yüksek.
+_FULFILMENT_LABELS = {
+    "mp": "Satıcı kendi gönderiyor (pazaryeri)",
+    "ty": "Trendyol deposundan gönderiliyor",
+    "tyf": "Trendyol deposundan gönderiliyor",
+    "fbt": "Trendyol deposundan gönderiliyor",
+}
+
+
+def _find_trendyol_state(soup: BeautifulSoup) -> dict | None:
+    """Sayfaya gömülü Trendyol durum nesnesini çıkarır; yoksa None."""
+    for script in soup.find_all("script"):
+        text = script.string
+        if not text or _TRENDYOL_STATE_MARKER not in text:
+            continue
+        start = text.find("{", text.find(_TRENDYOL_STATE_MARKER))
+        if start == -1:
+            continue
+        try:
+            # Süslü parantezleri elle saymak yerine JSON çözücünün kendi
+            # tarayıcısını kullan: bloktan sonra JS devam etse bile doğru biter.
+            data, _ = json.JSONDecoder().raw_decode(text[start:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and "product" in data:
+            return data
+    return None
+
+
+def _signals_from_trendyol(state: dict) -> dict:
+    """Gömülü Trendyol verisini ortak sinyal biçimine çevirir."""
+    product = state.get("product") or {}
+    listing = product.get("merchantListing") or {}
+    merchant = listing.get("merchant") or {}
+    variant = listing.get("winnerVariant") or {}
+    rating = product.get("ratingScore") or {}
+    score = merchant.get("sellerScore") or {}
+    price = variant.get("price") or {}
+
+    fulfilment = variant.get("fulfilmentType")
+
+    return {
+        "source": "trendyol_embedded",
+        "product": {
+            "name": product.get("name"),
+            "brand": (product.get("brand") or {}).get("name"),
+            "rating": rating.get("averageRating"),
+            "review_count": rating.get("commentCount"),
+            "favorite_count": product.get("favoriteCount"),
+            "in_stock": product.get("inStock"),
+            "running_out": variant.get("isRunningOut"),
+            "price": (price.get("discountedPrice") or {}).get("text"),
+        },
+        "seller": {
+            "name": merchant.get("name"),
+            "official_name": merchant.get("officialName"),
+            "city": merchant.get("cityName"),
+            "score": score.get("value"),
+            "score_scale": 10 if score.get("value") is not None else None,
+            "tax_number": merchant.get("taxNumber"),
+        },
+        "logistics": {
+            "fulfilled_by": _FULFILMENT_LABELS.get(
+                str(fulfilment).lower(), fulfilment
+            ),
+            "free_shipping": variant.get("freeCargo"),
+            "long_term_delivery": listing.get("isLongTermDelivery"),
+            "refundable": product.get("isRefundable"),
+            "max_installment": product.get("maxInstallment"),
+        },
+    }
+
+
+def _signals_from_json_ld(soup: BeautifulSoup) -> dict:
+    """Siteden bağımsız temel: JSON-LD'deki offers.seller ve aggregateRating.
+
+    Çoğu site burada yalnızca satıcı adını yayınlar; Trendyol'daki zenginlikte
+    veri beklenmemeli.
+    """
+    signals = {
+        "source": "json_ld",
+        "product": {},
+        "seller": {},
+        "logistics": {},
+    }
+
+    def walk(node, depth=0):
+        if depth > 4 or not isinstance(node, (dict, list)):
+            return
+        if isinstance(node, list):
+            for item in node:
+                walk(item, depth + 1)
+            return
+
+        if not signals["product"].get("name") and node.get("name"):
+            if str(node.get("@type", "")).startswith("Product"):
+                signals["product"]["name"] = node["name"]
+                brand = node.get("brand")
+                signals["product"]["brand"] = (
+                    brand.get("name") if isinstance(brand, dict) else brand
+                )
+
+        agg = node.get("aggregateRating")
+        if isinstance(agg, dict) and not signals["product"].get("rating"):
+            signals["product"]["rating"] = agg.get("ratingValue")
+            signals["product"]["review_count"] = agg.get("reviewCount") or agg.get(
+                "ratingCount"
+            )
+
+        offers = node.get("offers")
+        if isinstance(offers, (dict, list)):
+            for offer in offers if isinstance(offers, list) else [offers]:
+                if not isinstance(offer, dict):
+                    continue
+                seller = offer.get("seller")
+                if isinstance(seller, dict) and not signals["seller"].get("name"):
+                    signals["seller"]["name"] = seller.get("name")
+                    seller_rating = seller.get("aggregateRating")
+                    if isinstance(seller_rating, dict):
+                        signals["seller"]["score"] = seller_rating.get("ratingValue")
+                        signals["seller"]["score_scale"] = seller_rating.get(
+                            "bestRating"
+                        )
+                elif isinstance(seller, str) and not signals["seller"].get("name"):
+                    signals["seller"]["name"] = seller
+                if not signals["product"].get("price"):
+                    signals["product"]["price"] = offer.get("price")
+                if offer.get("availability") and "in_stock" not in signals["product"]:
+                    signals["product"]["in_stock"] = "InStock" in str(
+                        offer["availability"]
+                    )
+
+        for key in ("hasVariant", "@graph", "isRelatedTo", "mainEntity"):
+            if key in node:
+                walk(node[key], depth + 1)
+
+    for script in soup.find_all("script", type="application/ld+json"):
+        if not script.string or len(script.string) > 100_000:
+            continue
+        try:
+            walk(json.loads(script.string))
+        except json.JSONDecodeError:
+            continue
+
+    return signals
+
+
+def _build_decision_summary(signals: dict) -> dict:
+    """Sinyalleri sunumda kullanılabilir gerekçelere çevirir.
+
+    Amaç tek bir 'iyi/kötü' etiketi değil: hangi sinyalin kararı desteklediğini,
+    hangisinin uyarı olduğunu ve neyin bilinemediğini ayrı ayrı göstermek.
+    """
+    product = signals.get("product") or {}
+    seller = signals.get("seller") or {}
+    logistics = signals.get("logistics") or {}
+
+    strengths, concerns = [], []
+
+    score = seller.get("score")
+    if isinstance(score, (int, float)):
+        scale = seller.get("score_scale") or 10
+        normalized = score / scale * 10
+        if normalized >= 9:
+            strengths.append(f"Satıcı puanı {score}/{scale} — çok yüksek.")
+        elif normalized >= 8:
+            strengths.append(f"Satıcı puanı {score}/{scale} — iyi.")
+        elif normalized >= 7:
+            concerns.append(f"Satıcı puanı {score}/{scale} — orta; alternatif satıcıya bakın.")
+        else:
+            concerns.append(f"Satıcı puanı {score}/{scale} — düşük.")
+
+    rating, reviews = product.get("rating"), product.get("review_count")
+    if isinstance(rating, (int, float)):
+        if isinstance(reviews, int) and reviews < 10:
+            concerns.append(
+                f"Ürün puanı {rating} ama yalnızca {reviews} yoruma dayanıyor — "
+                "istatistiksel olarak zayıf."
+            )
+        elif isinstance(reviews, int) and reviews >= 100 and rating >= 4.5:
+            strengths.append(f"Ürün puanı {rating} ve {reviews} yoruma dayanıyor — güçlü sinyal.")
+        else:
+            strengths.append(f"Ürün puanı {rating} ({reviews} yorum).")
+
+    fulfilled = logistics.get("fulfilled_by")
+    if isinstance(fulfilled, str):
+        if "deposundan" in fulfilled:
+            strengths.append("Kargo platform deposundan çıkıyor — gecikme ve iade riski düşük.")
+        elif "pazaryeri" in fulfilled:
+            concerns.append(
+                "Kargoyu satıcı kendi yapıyor — kargo ve iade süreci satıcının "
+                "performansına bağlı."
+            )
+
+    if logistics.get("refundable") is True:
+        strengths.append("Ürün iade edilebilir.")
+    elif logistics.get("refundable") is False:
+        concerns.append("Ürün iade edilemiyor.")
+
+    if logistics.get("long_term_delivery"):
+        concerns.append("Uzun tedarik süresi işaretli — teslimat gecikebilir.")
+    if logistics.get("free_shipping") is True:
+        strengths.append("Kargo ücretsiz.")
+    if product.get("running_out"):
+        concerns.append("Stok tükeniyor — fiyat ve bulunurluk değişebilir.")
+
+    if isinstance(product.get("favorite_count"), int) and product["favorite_count"] >= 100:
+        strengths.append(f"{product['favorite_count']} favori — talep görüyor.")
+
+    notes = []
+    if not strengths and not concerns:
+        # Boş sonuç "satıcı kötü" değil "site bu veriyi yayınlamıyor" demek;
+        # aradaki farkı sunumda karıştırmamak için açıkça yazılıyor.
+        notes.append(
+            "Bu sayfada karar verdirecek satıcı/ürün sinyali bulunamadı. "
+            "Site bu verileri yayınlamıyor olabilir — sonucu 'satıcı zayıf' "
+            "diye yorumlamayın."
+        )
+
+    return {
+        "strengths": strengths,
+        "concerns": concerns,
+        "notes": notes,
+        # Bu üçü hiçbir pazaryerinde satıcı bazında yayınlanmıyor. Satıcı puanı
+        # zaten platformun bunlardan hesapladığı bileşke; sunumda "veri yok" ile
+        # "sorun yok" karıştırılmasın diye açıkça yazılıyor.
+        "unknowns": [
+            "Kargoda hasar/kayıp oranı satıcı bazında yayınlanmıyor.",
+            "Müşteri hizmetleri yanıt kalitesi yayınlanmıyor.",
+            "İade taleplerinde ulaşılabilirlik yayınlanmıyor.",
+            "Satıcı puanı bu üçünün platform tarafından hesaplanmış bileşkesidir.",
+        ],
+    }
 
 
 # --- MCP TOOLS ---
@@ -450,6 +756,38 @@ async def get_category_presentation_data(url: str) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+@mcp.tool()
+@handle_fetch_errors
+async def extract_seller_trust_signals(url: str) -> str:
+    """Ürün sayfasından satıcı ve ürün güven sinyallerini çıkarır: satıcı puanı,
+    resmi unvan, kargoyu kimin yaptığı, iade edilebilirlik, ürün puanının kaç
+    yoruma dayandığı. Sunumda 'hangi ürünü ve satıcıyı neden seçmeli' kararını
+    gerekçelendirmek için kullanılır.
+    """
+    soup, warning = await _fetch_soup(url)
+
+    state = _find_trendyol_state(soup)
+    if state:
+        signals = _signals_from_trendyol(state)
+    else:
+        signals = _signals_from_json_ld(soup)
+
+    payload = {
+        "type": "seller_trust_signals",
+        "url": url,
+        # Hangi kaynaktan geldiği önemli: JSON-LD tabanlı çıktı çok daha incedir,
+        # boş alanlar "satıcı kötü" değil "site yayınlamıyor" demektir.
+        "source": signals["source"],
+        "product": signals["product"],
+        "seller": signals["seller"],
+        "logistics": signals["logistics"],
+        "decision_summary": _build_decision_summary(signals),
+    }
+    if warning:
+        payload["warning"] = warning
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
 # --- MCP TOOLS SONU ---
 
 
@@ -463,6 +801,7 @@ _TOOL_ROUTES = {
     "product": extract_product_presentation_data,
     "schema": extract_structured_product_schema,
     "category": get_category_presentation_data,
+    "seller": extract_seller_trust_signals,
 }
 
 
@@ -494,6 +833,11 @@ async def api_schema(request: Request) -> Response:
 @mcp.custom_route("/api/category", methods=["GET"])
 async def api_category(request: Request) -> Response:
     return await _run_tool_route(request, "category")
+
+
+@mcp.custom_route("/api/seller", methods=["GET"])
+async def api_seller(request: Request) -> Response:
+    return await _run_tool_route(request, "seller")
 
 
 @mcp.custom_route("/health", methods=["GET"])
@@ -566,6 +910,7 @@ _INDEX_HTML = """<!doctype html>
       <button data-tool="product">Ürün Detayı</button>
       <button data-tool="schema">Yapısal Veri</button>
       <button data-tool="category">Kategori</button>
+      <button data-tool="seller">Satıcı Güveni</button>
     </div>
   </div>
 
