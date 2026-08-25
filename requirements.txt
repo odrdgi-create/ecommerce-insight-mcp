@@ -1,3 +1,14 @@
-fastmcp
-httpx
-beautifulsoup4
+fastmcp==3.4.7
+httpx==0.28.1
+beautifulsoup4==4.15.0
+
+# Chrome'un TLS/JA3 parmak izini taklit eder. Cloudflare (Trendyol) ve Akamai
+# (Hepsiburada) korumalarını tarayıcı çalıştırmadan geçmek için gerekli;
+# tarayıcı binary'si istemez, RAM maliyeti yok denecek kadar azdır.
+curl_cffi==0.16.2
+uvicorn==0.52.1
+
+# Playwright yedeği yalnızca yerel kurulumda kullanılır.
+# Render'da ENABLE_PLAYWRIGHT=0 ayarlıdır; bulutta bu satırı açmayın
+# (Chromium binary'si + ~400MB RAM gerekir, free tier'da OOM olur).
+# Yerelde:  pip install playwright==1.62.0 && playwright install chromium

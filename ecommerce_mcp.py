@@ -151,6 +151,60 @@ async def _fetch_html_httpx(url: str) -> str:
         return response.text
 
 
+def impersonate_available() -> bool:
+    """curl_cffi (Chrome TLS parmak izi taklidi) kullanılabilir mi."""
+    try:
+        import curl_cffi  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+async def _fetch_html_impersonate(url: str) -> str:
+    """Birincil yol: Chrome'un TLS/JA3 parmak izini taklit ederek sayfayı çek.
+
+    Cloudflare ve Akamai gibi bot korumaları istemciyi büyük ölçüde TLS
+    el sıkışmasından tanır; httpx'in Python'a özgü parmak izi (JA4 t13d1712h1,
+    HTTP/1.1) doğrudan ele veriyor. curl_cffi gerçek Chrome parmak izini
+    (t13d1516h2, HTTP/2) sunduğu için tarayıcı çalıştırmadan bu kontrolleri geçer.
+
+    Hatalar bilerek httpx sözlüğüne çevriliyor: çağıran taraftaki blok/timeout
+    mantığı tek bir istisna ailesiyle çalışsın diye.
+    """
+    from curl_cffi import requests as cffi
+    from curl_cffi.requests.exceptions import RequestException
+
+    request = httpx.Request("GET", url)
+    try:
+        async with cffi.AsyncSession() as session:
+            response = await session.get(
+                url,
+                impersonate="chrome",
+                # UA ve Sec-Ch-Ua'yı curl_cffi'nin kendisi yönetsin; taklit
+                # edilen sürümle tutarlı olmaları gerekiyor. Sadece dili ekliyoruz.
+                headers={"Accept-Language": "tr-TR,tr;q=0.9,en;q=0.8"},
+                timeout=_CLIENT_LIMITS["timeout"],
+                allow_redirects=True,
+            )
+    except RequestException as e:
+        raise httpx.RequestError(str(e), request=request) from e
+
+    if response.status_code >= 400:
+        raise httpx.HTTPStatusError(
+            f"{response.status_code} döndü",
+            request=request,
+            response=httpx.Response(response.status_code, request=request),
+        )
+    return response.text
+
+
+async def _fetch_html_primary(url: str) -> str:
+    """Mevcut en iyi HTTP yolunu seçer: varsa Chrome taklidi, yoksa düz httpx."""
+    if impersonate_available():
+        return await _fetch_html_impersonate(url)
+    return await _fetch_html_httpx(url)
+
+
 async def _fetch_html_playwright(url: str) -> str:
     """Yedek yol: gerçek bir headless tarayıcı ile sayfayı çek."""
     from playwright.async_api import async_playwright
@@ -184,8 +238,8 @@ async def _fetch_html_playwright(url: str) -> str:
 
 
 async def _fetch_soup(url: str) -> tuple[BeautifulSoup, str | None]:
-    """Önce httpx dener; statü kodu ya da içerik bot koruması gösteriyorsa
-    Playwright'a düşer.
+    """Önce Chrome TLS taklidiyle (yoksa düz httpx ile) dener; statü kodu ya da
+    içerik bot koruması gösteriyorsa Playwright'a düşer.
 
     (soup, warning) döndürür. Playwright kapalı/kurulu değilken bot koruması
     sezilirse istek tamamen başarısız olmaz: httpx'ten gelen kısmi içerik ve
@@ -195,7 +249,7 @@ async def _fetch_soup(url: str) -> tuple[BeautifulSoup, str | None]:
 
     warning = None
     try:
-        html = await _fetch_html_httpx(url)
+        html = await _fetch_html_primary(url)
         if _looks_blocked(html):
             if playwright_available():
                 html = await _fetch_html_playwright(url)
@@ -444,6 +498,7 @@ async def health(request: Request) -> Response:
         {
             "status": "ok",
             "server": "E-Commerce HTML Summarizer",
+            "impersonate": impersonate_available(),
             "playwright": playwright_available(),
             "tools": sorted(_TOOL_ROUTES),
         }
