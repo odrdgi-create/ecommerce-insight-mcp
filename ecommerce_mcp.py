@@ -44,11 +44,14 @@ _SOFT_BLOCK_PATTERNS = [
 # ortamlarda ENABLE_PLAYWRIGHT=0 ile kapatılır; yerelde varsayılan olarak açıktır.
 ENABLE_PLAYWRIGHT = os.getenv("ENABLE_PLAYWRIGHT", "1").lower() not in {"0", "false", "no"}
 
-# Playwright kapalıyken bot koruması sezilirse kullanıcıya döndürülen uyarı.
+# Sayfa alınabildi ama içerik eksik geldiğinde döndürülen uyarı.
+# Trendyol gibi bazı siteler bulut sunucularının IP'sine, tarayıcıdan görülenden
+# farklı ve içeriksiz bir sayfa servis ediyor. Bu ne TLS parmak izi ne de
+# JavaScript sorunu olduğu için sunucu tarafında aşılamıyor.
 DEGRADED_WARNING = (
-    "Bot koruması sezildi; bu sunucuda tarayıcı yedeği kapalı olduğu için "
-    "veriler eksik olabilir. Tam sonuç için yerel kurulumu kullanın "
-    "(bkz. README: yerel stdio kurulumu)."
+    "Bu site, bulut sunucusunun IP adresine eksik içerik gösteriyor "
+    "(Trendyol bunu yapıyor). Sonuçlar eksik olabilir. Tam veri için sunucuyu "
+    "kendi bilgisayarınızda çalıştırın — bkz. README, 'Yerel kurulum'."
 )
 
 
@@ -273,7 +276,9 @@ async def _fetch_soup(url: str) -> tuple[BeautifulSoup, str | None]:
                 else "istek zaman aşımına uğradı"
             )
             raise RuntimeError(
-                f"Site bu sunucudan gelen isteği engelledi ({reason}). {DEGRADED_WARNING}"
+                f"Site bu sunucudan gelen isteği engelledi ({reason}). "
+                "Tam veri için sunucuyu kendi bilgisayarınızda çalıştırın — "
+                "bkz. README, 'Yerel kurulum'."
             ) from e
         html = await _fetch_html_playwright(url)
 

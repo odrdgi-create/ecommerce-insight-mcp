@@ -125,8 +125,19 @@ Sunucu bu yüzden birincil çekici olarak **`curl_cffi`** kullanır: gerçek Chr
 |---|---|---|
 | Hepsiburada | 403 (1.7 KB blok sayfası) | 200 (610 KB, JSON-LD dahil) |
 
-Trendyol da Render'ın datacenter IP'sinden `httpx` ile 403 döndürüyordu; aynı mekanizma olduğu için `curl_cffi` ile geçmesi bekleniyor.
-
 Tarayıcı çalıştırmadığı için Playwright'ın aksine ek RAM ya da Chromium binary'si istemez; ücretsiz katmanda sorunsuz çalışır.
 
 Çekim sırası: **`curl_cffi` → `httpx` (curl_cffi yoksa) → Playwright (yalnızca yerel, JS render için)**.
+
+### Aşılamayan durum: IP bazlı içerik ayrımı
+
+Trendyol, bulut sunucusunun IP'sine **içerik olarak farklı bir sayfa** servis ediyor. Ölçüm — aynı URL (`https://www.trendyol.com/`), aynı anda:
+
+| İstek nereden | Sayfa başlığı | Bulunan ürün linki |
+|---|---|---|
+| Render (bulut) | "Online Alışveriş Sitesi, Türkiye'nin Trend Yolu \| Trendyol" | 0 |
+| Yerel makine | "En Trend Ürünler Türkiye'nin Online Alışveriş Sitesi Trendyol'da" | 8 |
+
+Bu ne TLS parmak izi, ne çerez, ne de JavaScript sorunu — sunucu daha isteği karşılarken IP'ye bakıp karar veriyor. Dolayısıyla TLS taklidi, oturum çerezi ya da Playwright bunu **çözmez**; hepsi aynı IP'den çıkar.
+
+**Trendyol için çözüm: sunucuyu yerelde çalıştırın.** Bulut sunucusu Hepsiburada, Amazon ve korumasız mağazalarda tam veri vermeye devam eder. Trendyol istendiğinde hata değil, kısmi veri + açıklayıcı `warning` alanı döner.
