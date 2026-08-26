@@ -10,6 +10,7 @@
 | `extract_structured_product_schema` | JSON-LD + OpenGraph: fiyat, stok, marka, puan |
 | `get_category_presentation_data` | Kategori sayfasından öne çıkan ürün listesi |
 | `extract_seller_trust_signals` | Satıcı puanı, kargoyu kimin yaptığı, iade durumu + gerekçeli karar özeti |
+| `get_presentation_style_guide` | Sabit sunum paleti, tipografi ve grafik kuralları |
 
 Canlı sunucu: **https://ecommerce-insight-mcp.onrender.com**
 
@@ -236,6 +237,48 @@ Ayrıca ürün puanı **her zaman yorum sayısıyla birlikte** değerlendirilir:
 | `json_ld` | Siteden bağımsız JSON-LD `offers.seller` — genelde yalnızca satıcı adı |
 
 `json_ld` kaynağında alanların boş gelmesi **satıcının zayıf olduğu anlamına gelmez**, site o veriyi yayınlamıyor demektir. Hiç sinyal bulunamazsa `decision_summary.notes` bunu açıkça söyler.
+
+---
+
+## Sunum tasarım sistemi
+
+Sunumlar arasında görünüm tutarlılığını sağlamak için palet, tipografi ve grafik kuralları sunucuda sabitlenmiştir. Onaylanan referans sunumdan ölçülerek çıkarıldı.
+
+### Palet
+
+| Rol | Renk |
+|---|---|
+| Yüzey | `#FFFFFF` · `#F1F5F9` · `#F7F5F2` |
+| Çizgi | `#E2E8F0` · `#CBD5E1` |
+| Metin | `#1E293B` · `#334155` · `#6B7280` · `#94A3B8` |
+| **Vurgu (birincil)** | **`#D97706`** |
+| **Vurgu (ikincil)** | **`#0F766E`** |
+
+Sunum başına **en fazla iki vurgu rengi**. Mavi tonları kullanılmaz.
+
+### Tipografi
+
+Başlık **Georgia**, gövde **Calibri**. Başlık 28pt · bölüm 16pt · alt başlık 13pt · gövde 11pt · açıklama 9pt. Gövde 11pt'nin altına düşürülmez — sığmıyorsa içerik azaltılır, punto değil.
+
+### Grafikler
+
+İzin verilen: **bar, yatay bar, tablo.** Yasak: **pasta, halka, 3D, radar, alan.** Oran göstermek için yatay bar kullanılır — gözle kıyaslaması pastadan kolaydır. Seri rengi tek: `#D97706` ya da `#0F766E`; ızgara `#E2E8F0`.
+
+### Yoğunluk
+
+Slayt başına en fazla 11 şekil, sunum başına en fazla 4 daire/halka biçimi, dekoratif görsel yok. Görsel yalnızca ürün fotoğrafı olarak, veriyi gösterdiği yerde kullanılır.
+
+### Nasıl uygulanır
+
+Üç yoldan da aynı veri gelir:
+
+```bash
+curl -s http://localhost:8000/api/style | python -m json.tool
+```
+
+- **Araç:** `get_presentation_style_guide` — model veriyi çekerken stili de okuyabilsin diye.
+- **Kaynak:** `style://presentation`
+- **Prompt:** `sunum_hazirla(url)` — veri çekme + stile uyma talimatını tek adımda verir.
 
 ---
 

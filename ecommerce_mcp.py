@@ -392,6 +392,68 @@ def _extract_images(soup: BeautifulSoup, base_url: str, limit: int = 6) -> list[
     return images[:limit]
 
 
+# --- SUNUM TASARIM SİSTEMİ ---
+
+# Palet ve kurallar, onaylanan "kedi evi kafesi" sunumundan ölçülerek çıkarıldı.
+# Amaç her üretimde aynı görünümü elde etmek: model veriyi çekerken stili de
+# okusun diye hem araç, hem kaynak (resource) hem de REST olarak sunuluyor.
+PRESENTATION_STYLE = {
+    "name": "E-Commerce Insight — Sunum Tasarım Sistemi v1",
+    "source": "Onaylanan referans sunumdan (kategori analizi) ölçülerek çıkarıldı.",
+    "palette": {
+        # Slate ölçeği: tüm yüzeyler ve metin bu nötr aileden gelir.
+        "surface": "#FFFFFF",
+        "surface_alt": "#F1F5F9",
+        "surface_warm": "#F7F5F2",
+        "border": "#E2E8F0",
+        "border_strong": "#CBD5E1",
+        "text": "#1E293B",
+        "text_secondary": "#334155",
+        "text_muted": "#6B7280",
+        "text_faint": "#94A3B8",
+        # Vurgu renkleri. Sunum başına EN FAZLA İKİSİ kullanılır.
+        "accent_primary": "#D97706",
+        "accent_secondary": "#0F766E",
+    },
+    "typography": {
+        "heading_font": "Georgia",
+        "body_font": "Calibri",
+        "title_pt": 28,
+        "section_pt": 16,
+        "subhead_pt": 13,
+        "body_pt": 11,
+        "caption_pt": 9,
+    },
+    "rules": [
+        "Vurgu rengi sunum başına en fazla iki tane: #D97706 birincil, #0F766E ikincil. "
+        "Üçüncü bir vurgu rengi eklenmez.",
+        "Mavi tonları kullanılmaz. Nötr yüzey + tek sıcak vurgu düzeni korunur.",
+        "Gövde metni 11pt'nin altına düşürülmez; sığmıyorsa içerik azaltılır, punto değil.",
+        "Başlıklar Georgia, gövde Calibri. Üçüncü bir yazı tipi eklenmez.",
+        "Slayt başına ortalama 11 şekli aşmayın — referans sunum 8 slaytta 88 şekil.",
+        "Daire/halka (pasta) biçimleri toplamda 4'ü geçmez; oran göstermek için "
+        "yatay bar tercih edilir.",
+        "Grafikler bar grafiktir. Pasta ve halka grafik kullanılmaz: kategori "
+        "karşılaştırmasında bar, oranı gözle kıyaslanabilir kılar.",
+        "Grafik serisi tek renktir (#D97706 ya da #0F766E); ızgara çizgisi #E2E8F0.",
+        "Dekoratif görsel eklenmez. Görsel yalnızca ürün fotoğrafı olarak, veriyi "
+        "gösterdiği yerde kullanılır.",
+    ],
+    "charts": {
+        "allowed": ["bar", "horizontal_bar", "table"],
+        "forbidden": ["pie", "doughnut", "3d", "radar", "area"],
+        "series_colors": ["#D97706", "#0F766E"],
+        "gridline_color": "#E2E8F0",
+        "axis_text_color": "#334155",
+    },
+    "density": {
+        "max_shapes_per_slide": 11,
+        "max_circles_per_deck": 4,
+        "decorative_images": 0,
+    },
+}
+
+
 # --- SATICI GÜVEN SİNYALLERİ ---
 
 # Trendyol'un ürün sayfasına gömdüğü durum nesnesi. Satıcı puanı, resmi unvan,
@@ -788,6 +850,41 @@ async def extract_seller_trust_signals(url: str) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+@mcp.tool()
+async def get_presentation_style_guide() -> str:
+    """Sunum tasarım sistemini döndürür: sabit renk paleti, tipografi, izin verilen
+    grafik tipleri ve yoğunluk sınırları. Bu sunucudan çekilen veriyle sunum
+    hazırlanırken HER SEFERİNDE bu kurallara uyulmalıdır — sunumlar arasında
+    görünüm tutarlılığı bununla sağlanır.
+    """
+    return json.dumps(PRESENTATION_STYLE, ensure_ascii=False, indent=2)
+
+
+@mcp.resource("style://presentation")
+def presentation_style_resource() -> str:
+    """Sunum tasarım sistemi (kaynak olarak okumayı destekleyen client'lar için)."""
+    return json.dumps(PRESENTATION_STYLE, ensure_ascii=False, indent=2)
+
+
+@mcp.prompt()
+def sunum_hazirla(url: str) -> str:
+    """Verilen ürün/kategori linkinden, sabit tasarım sistemine uyan bir kategori
+    analizi sunumu hazırlama talimatı üretir."""
+    return (
+        f"{url} adresi için kategori analizi sunumu hazırla.\n\n"
+        "1. Veriyi bu sunucunun araçlarıyla çek: extract_product_presentation_data, "
+        "extract_structured_product_schema, get_category_presentation_data ve "
+        "satıcı kararı için extract_seller_trust_signals.\n"
+        "2. get_presentation_style_guide aracını çağır ve döndürdüğü tasarım "
+        "sistemine harfiyen uy.\n\n"
+        "Özellikle dikkat: yalnızca iki vurgu rengi (#D97706 birincil, #0F766E "
+        "ikincil), mavi ton yok, pasta/halka grafik yok — oranlar yatay bar ile "
+        "gösterilir, gövde metni 11pt altına düşmez, dekoratif görsel eklenmez.\n\n"
+        "Satıcı bölümünde decision_summary'deki strengths/concerns/unknowns "
+        "ayrımını koru: 'veri yok' ile 'sorun yok' aynı şey değildir."
+    )
+
+
 # --- MCP TOOLS SONU ---
 
 
@@ -838,6 +935,12 @@ async def api_category(request: Request) -> Response:
 @mcp.custom_route("/api/seller", methods=["GET"])
 async def api_seller(request: Request) -> Response:
     return await _run_tool_route(request, "seller")
+
+
+@mcp.custom_route("/api/style", methods=["GET"])
+async def api_style(request: Request) -> Response:
+    """Tasarım sistemini düz JSON olarak verir."""
+    return JSONResponse(PRESENTATION_STYLE)
 
 
 @mcp.custom_route("/health", methods=["GET"])

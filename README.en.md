@@ -10,6 +10,7 @@ An MCP server that pulls presentation-ready data out of product and category pag
 | `extract_structured_product_schema` | JSON-LD + OpenGraph: price, stock, brand, rating |
 | `get_category_presentation_data` | Featured product list from a category page |
 | `extract_seller_trust_signals` | Seller rating, who ships it, return policy + a reasoned decision summary |
+| `get_presentation_style_guide` | The pinned deck palette, typography and chart rules |
 
 Live server: **https://ecommerce-insight-mcp.onrender.com**
 
@@ -232,6 +233,48 @@ The `source` field says where the data came from:
 | `json_ld` | Site-agnostic JSON-LD `offers.seller` — usually just the seller name |
 
 Empty fields under `json_ld` **do not mean the seller is weak**; they mean the site doesn't publish that data. If no signal is found at all, `decision_summary.notes` says so explicitly.
+
+---
+
+## Presentation design system
+
+To keep every deck looking the same, the palette, typography and chart rules are pinned in the server. They were measured from an approved reference deck.
+
+### Palette
+
+| Role | Colour |
+|---|---|
+| Surface | `#FFFFFF` · `#F1F5F9` · `#F7F5F2` |
+| Border | `#E2E8F0` · `#CBD5E1` |
+| Text | `#1E293B` · `#334155` · `#6B7280` · `#94A3B8` |
+| **Accent (primary)** | **`#D97706`** |
+| **Accent (secondary)** | **`#0F766E`** |
+
+At most **two accent colours per deck**. No blues.
+
+### Typography
+
+Headings **Georgia**, body **Calibri**. Title 28pt · section 16pt · subhead 13pt · body 11pt · caption 9pt. Body never drops below 11pt — if it doesn't fit, cut content, not point size.
+
+### Charts
+
+Allowed: **bar, horizontal bar, table.** Forbidden: **pie, doughnut, 3D, radar, area.** Proportions are shown with horizontal bars, which are easier to compare by eye than pie slices. One series colour: `#D97706` or `#0F766E`; gridlines `#E2E8F0`.
+
+### Density
+
+At most 11 shapes per slide, at most 4 circular shapes per deck, no decorative images. Images appear only as product photos, where they carry data.
+
+### How to apply it
+
+The same spec is served three ways:
+
+```bash
+curl -s http://localhost:8000/api/style | python -m json.tool
+```
+
+- **Tool:** `get_presentation_style_guide` — so the model reads the style while it fetches the data.
+- **Resource:** `style://presentation`
+- **Prompt:** `sunum_hazirla(url)` — fetches the data and enforces the style in one step.
 
 ---
 
