@@ -1,3 +1,4 @@
+import asyncio
 import functools
 import ipaddress
 import json
@@ -392,28 +393,116 @@ def _extract_images(soup: BeautifulSoup, base_url: str, limit: int = 6) -> list[
     return images[:limit]
 
 
+# Sunuma girmeyen, buna karşılık çıktıyı katlayan şema alanları.
+_SCHEMA_NOISE_FIELDS = (
+    "hasVariant",
+    "isRelatedTo",
+    "additionalProperty",
+    "breadcrumb",
+    "primaryImageOfPage",
+    "@context",
+)
+
+
+def _trim_schema(schema):
+    """Şemayı sunumda işe yarayan alanlara indirger."""
+    if not isinstance(schema, dict):
+        return schema
+
+    trimmed = {}
+    for key, value in schema.items():
+        if key in _SCHEMA_NOISE_FIELDS:
+            continue
+        if key == "image":
+            # Görsel listesi uzun olabiliyor; ilk kare temsil için yeterli.
+            urls = list(_iter_schema_images(value))
+            if urls:
+                trimmed["image"] = urls[0]
+            continue
+        if isinstance(value, str) and len(value) > 600:
+            trimmed[key] = value[:600] + "…"
+            continue
+        trimmed[key] = value
+
+    variants = schema.get("hasVariant")
+    if isinstance(variants, list):
+        trimmed["variant_count"] = len(variants)
+    return trimmed
+
+
+def _key_facts_from_schemas(schemas: list, og_data: dict) -> dict:
+    """Şemalardan fiyat/puan/stok gibi kararı taşıyan alanları süzer."""
+    facts = {}
+
+    def walk(node, depth=0):
+        if depth > 4 or not isinstance(node, (dict, list)):
+            return
+        if isinstance(node, list):
+            for item in node:
+                walk(item, depth + 1)
+            return
+
+        if not facts.get("name") and str(node.get("@type", "")).startswith("Product"):
+            facts["name"] = node.get("name")
+            brand = node.get("brand") or node.get("manufacturer")
+            facts["brand"] = brand.get("name") if isinstance(brand, dict) else brand
+            facts["sku"] = node.get("sku")
+
+        rating = node.get("aggregateRating")
+        if isinstance(rating, dict) and "rating" not in facts:
+            facts["rating"] = rating.get("ratingValue")
+            facts["review_count"] = rating.get("reviewCount") or rating.get("ratingCount")
+
+        offers = node.get("offers")
+        if isinstance(offers, (dict, list)):
+            for offer in offers if isinstance(offers, list) else [offers]:
+                if isinstance(offer, dict) and "price" not in facts and offer.get("price"):
+                    facts["price"] = offer.get("price")
+                    facts["currency"] = offer.get("priceCurrency")
+                    facts["availability"] = str(offer.get("availability", "")).split("/")[-1]
+
+        for key in ("hasVariant", "@graph", "isRelatedTo", "mainEntity"):
+            if key in node:
+                walk(node[key], depth + 1)
+
+    walk(schemas)
+
+    if not facts.get("name") and og_data.get("og:title"):
+        facts["name"] = og_data["og:title"]
+    return facts
+
+
 # --- SUNUM TASARIM SİSTEMİ ---
 
 # Palet ve kurallar, onaylanan "kedi evi kafesi" sunumundan ölçülerek çıkarıldı.
 # Amaç her üretimde aynı görünümü elde etmek: model veriyi çekerken stili de
 # okusun diye hem araç, hem kaynak (resource) hem de REST olarak sunuluyor.
 PRESENTATION_STYLE = {
-    "name": "E-Commerce Insight — Sunum Tasarım Sistemi v1",
-    "source": "Onaylanan referans sunumdan (kategori analizi) ölçülerek çıkarıldı.",
+    "name": "E-Commerce Insight — Sunum Tasarım Sistemi v2",
+    "source": "Onaylanan referans sunumun (kedi evi kategori analizi) slayt XML'inden ölçüldü.",
     "palette": {
-        # Slate ölçeği: tüm yüzeyler ve metin bu nötr aileden gelir.
-        "surface": "#FFFFFF",
+        # Açık slaytlar: sıcak kırık beyaz zemin, slate metin.
+        "surface": "#F7F5F2",
+        "surface_card": "#FFFFFF",
         "surface_alt": "#F1F5F9",
-        "surface_warm": "#F7F5F2",
+        # Koyu slaytlar (kapak ve bölüm ayracı) bu iki laciverti kullanır.
+        "surface_dark": "#1E293B",
+        "surface_dark_alt": "#24334A",
         "border": "#E2E8F0",
         "border_strong": "#CBD5E1",
         "text": "#1E293B",
         "text_secondary": "#334155",
         "text_muted": "#6B7280",
         "text_faint": "#94A3B8",
-        # Vurgu renkleri. Sunum başına EN FAZLA İKİSİ kullanılır.
-        "accent_primary": "#D97706",
-        "accent_secondary": "#0F766E",
+        "text_on_dark": "#FFFFFF",
+    },
+    # Kategorik vurgu seti: kart/daire/şerit gibi ayrım gerektiren yerlerde
+    # sırayla kullanılır. Grafiklerde seri rengi TEK'tir (accent_primary).
+    "accents": {
+        "primary": "#D97706",
+        "teal": "#0F766E",
+        "terracotta": "#DC5F4E",
+        "green": "#15803D",
     },
     "typography": {
         "heading_font": "Georgia",
@@ -424,31 +513,51 @@ PRESENTATION_STYLE = {
         "body_pt": 11,
         "caption_pt": 9,
     },
+    # Referans sunumda başlık ile alt başlığın çakıştığı bir slayt çıktı:
+    # başlık iki satıra taştı ama alt başlık sabit ofsetle konumlandığı için
+    # üstüne bindi. Aşağıdaki kurallar bunu önlemek için.
+    "layout": {
+        "title_max_chars": 45,
+        "title_max_lines": 2,
+        "rules": [
+            "Alt başlık, başlığa sabit bir dikey ofsetle DEĞİL, başlık kutusunun "
+            "alt kenarına göre konumlandırılır; başlık iki satıra taşarsa alt "
+            "başlık aşağı kayar.",
+            "Başlık kutusu için her zaman iki satırlık yükseklik ayrılır; tek "
+            "satırlık başlıkta boşluk kalır, bu kabul edilir.",
+            "Başlık 45 karakteri aşıyorsa metin kısaltılır — punto küçültülmez.",
+            "Metin kutuları birbiriyle örtüşmez; her blok bir öncekinin alt "
+            "kenarından sonra başlar.",
+        ],
+    },
     "rules": [
-        "Vurgu rengi sunum başına en fazla iki tane: #D97706 birincil, #0F766E ikincil. "
-        "Üçüncü bir vurgu rengi eklenmez.",
-        "Mavi tonları kullanılmaz. Nötr yüzey + tek sıcak vurgu düzeni korunur.",
-        "Gövde metni 11pt'nin altına düşürülmez; sığmıyorsa içerik azaltılır, punto değil.",
+        "Kategorik ayrım gereken yerde accents setinden sırayla kullanılır "
+        "(primary → teal → terracotta → green); beşinci bir renk eklenmez.",
+        "Mavi tonları kullanılmaz. Lacivert yalnızca koyu slayt zemini ve metin "
+        "rengidir, vurgu rengi değildir.",
+        "Gövde metni 11pt'nin altına düşürülmez; sığmıyorsa içerik azaltılır.",
         "Başlıklar Georgia, gövde Calibri. Üçüncü bir yazı tipi eklenmez.",
-        "Slayt başına ortalama 11 şekli aşmayın — referans sunum 8 slaytta 88 şekil.",
-        "Daire/halka (pasta) biçimleri toplamda 4'ü geçmez; oran göstermek için "
-        "yatay bar tercih edilir.",
-        "Grafikler bar grafiktir. Pasta ve halka grafik kullanılmaz: kategori "
-        "karşılaştırmasında bar, oranı gözle kıyaslanabilir kılar.",
-        "Grafik serisi tek renktir (#D97706 ya da #0F766E); ızgara çizgisi #E2E8F0.",
-        "Dekoratif görsel eklenmez. Görsel yalnızca ürün fotoğrafı olarak, veriyi "
-        "gösterdiği yerde kullanılır.",
+        "Kapak ve bölüm ayracı koyu (#1E293B) zeminde, içerik slaytları açık "
+        "(#F7F5F2) zeminde.",
+        "Sayısal vurgular (KPI, sıra numarası) Georgia ve büyük punto ile verilir.",
+        "Grafikler bar grafiktir. Pasta, halka, 3D ve radar kullanılmaz.",
+        "Grafik serisi TEK renktir (#D97706); kategorik ayrım grafikte değil, "
+        "kart ve şeritlerde yapılır.",
+        "Dekoratif görsel eklenmez. Görsel yalnızca ürün fotoğrafı olarak kullanılır.",
+        "Her slaytta kaynak satırı bulunur (9pt, #6B7280).",
     ],
     "charts": {
-        "allowed": ["bar", "horizontal_bar", "table"],
+        "allowed": ["bar", "horizontal_bar", "table", "kpi_tile"],
         "forbidden": ["pie", "doughnut", "3d", "radar", "area"],
-        "series_colors": ["#D97706", "#0F766E"],
+        "series_color": "#D97706",
         "gridline_color": "#E2E8F0",
         "axis_text_color": "#334155",
+        "note": "Sıralı karşılaştırmada yatay bar, büyükten küçüğe sıralanır ve "
+                "değer etiketi barın sağına yazılır.",
     },
     "density": {
         "max_shapes_per_slide": 11,
-        "max_circles_per_deck": 4,
+        "max_accent_shapes_per_slide": 4,
         "decorative_images": 0,
     },
 }
@@ -697,6 +806,101 @@ def _build_decision_summary(signals: dict) -> dict:
     }
 
 
+def _extract_product_links(soup: BeautifulSoup, base_url: str, limit: int = 8) -> list[dict]:
+    """Kategori sayfasındaki ürün bağlantılarını toplar."""
+    products = []
+    seen = set()
+
+    for link in soup.find_all("a", href=True):
+        href = link["href"].strip()
+        full_url = urljoin(base_url, href)
+        text = link.get_text(strip=True)
+
+        is_product_link = any(
+            pattern in href for pattern in ["-p-", "/product/", "/urun/", "-pm-", "/p-"]
+        )
+
+        if is_product_link and text and len(text) > 10 and full_url not in seen:
+            seen.add(full_url)
+            products.append({"name": text[:90], "url": full_url})
+
+        if len(products) >= limit:
+            break
+
+    return products
+
+
+def _product_record(soup: BeautifulSoup, url: str) -> dict:
+    """Tek ürün için sunuma giren sıkı özet. Ham şema dökülmez."""
+    state = _find_trendyol_state(soup)
+    signals = _signals_from_trendyol(state) if state else _signals_from_json_ld(soup)
+    product = signals["product"]
+    seller = signals["seller"]
+    logistics = signals["logistics"]
+
+    return {
+        "url": url,
+        "name": product.get("name"),
+        "brand": product.get("brand"),
+        "price": product.get("price"),
+        "rating": product.get("rating"),
+        "review_count": product.get("review_count"),
+        "favorite_count": product.get("favorite_count"),
+        "seller": seller.get("name"),
+        "seller_score": seller.get("score"),
+        "fulfilled_by": logistics.get("fulfilled_by"),
+        "refundable": logistics.get("refundable"),
+        "in_stock": product.get("in_stock"),
+    }
+
+
+def _category_summary(records: list[dict]) -> dict:
+    """Ürün kayıtlarından sunumun özet slaytına giren toplamları hesaplar."""
+
+    def numbers(field):
+        return [r[field] for r in records if isinstance(r.get(field), (int, float))]
+
+    # Henüz yorum almamış ürünün puanı 0 gelir; bu 0'ı ortalamaya katmak
+    # kategori puanını gerçekte olduğundan çok düşük gösteriyordu.
+    ratings = [
+        r["rating"]
+        for r in records
+        if isinstance(r.get("rating"), (int, float))
+        and r["rating"] > 0
+        and (r.get("review_count") or 0) > 0
+    ]
+    reviews = numbers("review_count")
+    scores = numbers("seller_score")
+
+    prices = []
+    for record in records:
+        raw = record.get("price")
+        if isinstance(raw, (int, float)):
+            prices.append(float(raw))
+        elif isinstance(raw, str):
+            # "4.079 TL" gibi metinleri sayıya çevir: binlik ayıracı nokta,
+            # ondalık ayıracı virgül olan Türkçe biçim.
+            cleaned = raw.replace(" TL", "").replace(".", "").replace(",", ".").strip()
+            try:
+                prices.append(float(cleaned))
+            except ValueError:
+                pass
+
+    summary = {"product_count": len(records)}
+    if ratings:
+        summary["average_rating"] = round(sum(ratings) / len(ratings), 2)
+        # Ortalamanın kaç ürüne dayandığı, ortalamanın kendisi kadar önemli.
+        summary["rated_product_count"] = len(ratings)
+    if reviews:
+        summary["total_reviews"] = sum(reviews)
+    if scores:
+        summary["average_seller_score"] = round(sum(scores) / len(scores), 2)
+    if prices:
+        summary["price_min"] = min(prices)
+        summary["price_max"] = max(prices)
+    return summary
+
+
 # --- MCP TOOLS ---
 
 
@@ -766,9 +970,15 @@ async def extract_structured_product_schema(url: str) -> str:
         if prop.startswith("og:") or prop.startswith("product:"):
             og_data[prop] = meta.get("content", "")
 
+    # Ham şemalar sunuma girmeyen devasa alanlar taşıyor (Trendyol'da tek
+    # ürünün hasVariant dizisi 8 KB). Bunlar budanmazsa 8 ürünlük bir analiz
+    # yüz binlerce token'a çıkıp client'ın tool kullanım sınırını doldurur.
+    trimmed = [_trim_schema(schema) for schema in structured_data]
+
     payload = {
         "url": url,
-        "json_ld_schemas": structured_data,
+        "key_facts": _key_facts_from_schemas(structured_data, og_data),
+        "json_ld_schemas": trimmed,
         "opengraph_metadata": og_data,
     }
     if skipped_oversized:
@@ -787,25 +997,7 @@ async def get_category_presentation_data(url: str) -> str:
 
     title = soup.title.get_text(strip=True) if soup.title else "Kategori Analizi"
 
-    products = []
-    links = soup.find_all("a", href=True)
-
-    for link in links:
-        href = link["href"].strip()
-
-        full_url = urljoin(url, href)
-        text = link.get_text(strip=True)
-
-        is_product_link = any(
-            pattern in href for pattern in ["-p-", "/product/", "/urun/", "-pm-", "/p-"]
-        )
-
-        if is_product_link and text and len(text) > 10:
-            if not any(p["url"] == full_url for p in products):
-                products.append({"name": text[:90], "url": full_url})
-
-        if len(products) >= 8:
-            break
+    products = _extract_product_links(soup, url, limit=8)
 
     payload = {
         "type": "category_showcase_presentation",
@@ -872,17 +1064,82 @@ def sunum_hazirla(url: str) -> str:
     analizi sunumu hazırlama talimatı üretir."""
     return (
         f"{url} adresi için kategori analizi sunumu hazırla.\n\n"
-        "1. Veriyi bu sunucunun araçlarıyla çek: extract_product_presentation_data, "
-        "extract_structured_product_schema, get_category_presentation_data ve "
-        "satıcı kararı için extract_seller_trust_signals.\n"
+        "1. Veriyi TEK çağrıyla çek: analyze_category(url). Ürün başına ayrı "
+        "extract_* çağrısı YAPMA — kategori analizi için gereken her şeyi "
+        "(fiyat, puan, yorum sayısı, satıcı, satıcı puanı, kargo tipi ve "
+        "kategori toplamları) bu araç tek seferde döndürür. Tek bir ürünü "
+        "derinlemesine incelemen gerekirse o zaman extract_seller_trust_signals "
+        "ya da extract_product_presentation_data kullan.\n"
         "2. get_presentation_style_guide aracını çağır ve döndürdüğü tasarım "
         "sistemine harfiyen uy.\n\n"
         "Özellikle dikkat: yalnızca iki vurgu rengi (#D97706 birincil, #0F766E "
         "ikincil), mavi ton yok, pasta/halka grafik yok — oranlar yatay bar ile "
         "gösterilir, gövde metni 11pt altına düşmez, dekoratif görsel eklenmez.\n\n"
+        "Yerleşimde: alt başlığı başlık kutusunun altına göre konumlandır, sabit "
+        "ofsetle değil — başlık iki satıra taşarsa metinler üst üste biner. "
+        "Başlığı 45 karakterin altında tut.\n\n"
         "Satıcı bölümünde decision_summary'deki strengths/concerns/unknowns "
-        "ayrımını koru: 'veri yok' ile 'sorun yok' aynı şey değildir."
+        "ayrımını koru: 'veri yok' ile 'sorun yok' aynı şey değildir. "
+        "Ortalama puan verirken kaç ürüne dayandığını (rated_product_count) da yaz."
     )
+
+
+@mcp.tool()
+@handle_fetch_errors
+async def analyze_category(url: str, limit: int = 8) -> str:
+    """Kategori sayfasını ve içindeki ürünleri TEK çağrıda analiz eder.
+
+    Kategori analizi sunumu hazırlarken BU ARAÇ KULLANILMALIDIR. Ürün başına
+    ayrı ayrı extract_* araçlarını çağırmak yerine her şeyi tek seferde döndürür:
+    ürün adı, fiyat, puan, yorum sayısı, satıcı ve satıcı puanı, kargo tipi ve
+    kategori toplamları. Böylece hem tool çağrısı sayısı hem de bağlam tüketimi
+    ondalık mertebede azalır.
+
+    Ham JSON-LD dökülmez; yalnızca sunuma giren alanlar döner.
+    """
+    soup, warning = await _fetch_soup(url)
+    title = soup.title.get_text(strip=True) if soup.title else "Kategori Analizi"
+
+    limit = max(1, min(int(limit), 12))
+    links = _extract_product_links(soup, url, limit=limit)
+
+    # Ürün sayfaları eşzamanlı çekilir; sınırlı eşzamanlılık hem hedef siteyi
+    # yormaz hem de ücretsiz katmanın bellek/CPU payını aşmaz.
+    semaphore = asyncio.Semaphore(4)
+
+    async def fetch_one(link: dict) -> dict:
+        async with semaphore:
+            try:
+                product_soup, _ = await _fetch_soup(link["url"])
+            except Exception as e:
+                return {
+                    "url": link["url"],
+                    "name": link["name"],
+                    "error": f"{type(e).__name__}: {str(e)[:80]}",
+                }
+            record = _product_record(product_soup, link["url"])
+            if not record.get("name"):
+                record["name"] = link["name"]
+            return record
+
+    records = await asyncio.gather(*(fetch_one(link) for link in links))
+    records = list(records)
+
+    ok = [r for r in records if "error" not in r]
+    failed = [r for r in records if "error" in r]
+
+    payload = {
+        "type": "category_analysis",
+        "category_title": title,
+        "category_url": url,
+        "summary": _category_summary(ok),
+        "products": ok,
+    }
+    if failed:
+        payload["failed_products"] = failed
+    if warning:
+        payload["warning"] = warning
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 # --- MCP TOOLS SONU ---
@@ -895,6 +1152,7 @@ def sunum_hazirla(url: str) -> str:
 # /mcp yoluna ve paylaşılan config JSON'ına dokunulmaz.
 
 _TOOL_ROUTES = {
+    "analyze": analyze_category,
     "product": extract_product_presentation_data,
     "schema": extract_structured_product_schema,
     "category": get_category_presentation_data,
@@ -911,7 +1169,21 @@ async def _run_tool_route(request: Request, tool_name: str) -> Response:
             status_code=400,
         )
 
-    raw = await _TOOL_ROUTES[tool_name](url)
+    kwargs = {}
+    # analyze_category kaç ürün inceleyeceğini limit ile alıyor; REST tarafında
+    # da geçirilmezse sorgu parametresi sessizce yok sayılıyordu.
+    if tool_name == "analyze":
+        raw_limit = request.query_params.get("limit")
+        if raw_limit:
+            try:
+                kwargs["limit"] = int(raw_limit)
+            except ValueError:
+                return JSONResponse(
+                    {"error": f"'limit' sayı olmalı ('{raw_limit}' verildi)."},
+                    status_code=400,
+                )
+
+    raw = await _TOOL_ROUTES[tool_name](url, **kwargs)
     payload = json.loads(raw)
     status = 400 if "error" in payload else 200
     return JSONResponse(payload, status_code=status)
@@ -935,6 +1207,11 @@ async def api_category(request: Request) -> Response:
 @mcp.custom_route("/api/seller", methods=["GET"])
 async def api_seller(request: Request) -> Response:
     return await _run_tool_route(request, "seller")
+
+
+@mcp.custom_route("/api/analyze", methods=["GET"])
+async def api_analyze(request: Request) -> Response:
+    return await _run_tool_route(request, "analyze")
 
 
 @mcp.custom_route("/api/style", methods=["GET"])

@@ -11,6 +11,7 @@
 | `get_category_presentation_data` | Kategori sayfasından öne çıkan ürün listesi |
 | `extract_seller_trust_signals` | Satıcı puanı, kargoyu kimin yaptığı, iade durumu + gerekçeli karar özeti |
 | `get_presentation_style_guide` | Sabit sunum paleti, tipografi ve grafik kuralları |
+| **`analyze_category`** | **Kategori + tüm ürünleri tek çağrıda** — sunum için önerilen giriş noktası |
 
 Canlı sunucu: **https://ecommerce-insight-mcp.onrender.com**
 
@@ -35,6 +36,7 @@ curl "https://ecommerce-insight-mcp.onrender.com/api/product?url=https://ornek.c
 curl "https://ecommerce-insight-mcp.onrender.com/api/schema?url=https://ornek.com/urun"
 curl "https://ecommerce-insight-mcp.onrender.com/api/category?url=https://ornek.com/kategori"
 curl "https://ecommerce-insight-mcp.onrender.com/api/seller?url=https://ornek.com/urun"
+curl "https://ecommerce-insight-mcp.onrender.com/api/analyze?url=https://ornek.com/kategori&limit=8"
 ```
 
 Sunucunun ayakta olup olmadığını kontrol etmek için:
@@ -240,6 +242,31 @@ Ayrıca ürün puanı **her zaman yorum sayısıyla birlikte** değerlendirilir:
 
 ---
 
+## Tool kullanım sınırına takılmamak
+
+Kategori analizi için ürün başına ayrı ayrı `extract_*` çağırmak client'ın tool kullanım sınırını doldurur. 8 ürünlük bir analiz bu şekilde **25 tool çağrısı ve ~66.000 token** demekti; en büyük pay ham JSON-LD dökümündendi (tek üründe 23 KB, bunun 8 KB'ı `hasVariant`).
+
+İki değişiklikle çözüldü:
+
+**1. `analyze_category` — tek çağrı.** Kategoriyi ve içindeki ürünleri eşzamanlı çeker, yalnızca sunuma giren alanları döndürür.
+
+```bash
+curl -s "http://localhost:8000/api/analyze?url=<KATEGORİ_LİNKİ>&limit=8" | python -m json.tool
+```
+
+**2. Ham şema budandı.** `extract_structured_product_schema` artık `key_facts` (ad, marka, fiyat, puan, yorum sayısı, stok) döndürüyor; ham şemadan `hasVariant`, `isRelatedTo`, `additionalProperty` gibi alanlar çıkarılıyor.
+
+Ölçülen fark:
+
+| | Önce | Sonra |
+|---|---|---|
+| Şema aracı (tek ürün) | 23.474 karakter (~6.700 token) | 4.983 karakter (~1.423 token) |
+| 8 ürünlük kategori analizi | 25 çağrı, ~66.000 token | **1 çağrı, ~1.261 token** |
+
+`analyze_category` çıktısındaki `summary.average_rating` yalnızca **yorumu olan** ürünlerden hesaplanır; kaç ürüne dayandığı `rated_product_count` alanında verilir. Yorum almamış ürünün `0` puanı ortalamaya katılmaz.
+
+---
+
 ## Sunum tasarım sistemi
 
 Sunumlar arasında görünüm tutarlılığını sağlamak için palet, tipografi ve grafik kuralları sunucuda sabitlenmiştir. Onaylanan referans sunumdan ölçülerek çıkarıldı.
@@ -251,10 +278,14 @@ Sunumlar arasında görünüm tutarlılığını sağlamak için palet, tipograf
 | Yüzey | `#FFFFFF` · `#F1F5F9` · `#F7F5F2` |
 | Çizgi | `#E2E8F0` · `#CBD5E1` |
 | Metin | `#1E293B` · `#334155` · `#6B7280` · `#94A3B8` |
-| **Vurgu (birincil)** | **`#D97706`** |
-| **Vurgu (ikincil)** | **`#0F766E`** |
+| Koyu zemin | `#1E293B` · `#24334A` |
+| **Vurgu seti** | **`#D97706`** amber · **`#0F766E`** teal · **`#DC5F4E`** terracotta · **`#15803D`** yeşil |
 
-Sunum başına **en fazla iki vurgu rengi**. Mavi tonları kullanılmaz.
+Kategorik ayrım gereken yerde vurgu seti **sırayla** kullanılır; beşinci renk eklenmez. Mavi ton yoktur — lacivert yalnızca koyu slayt zemini ve metin rengidir. Kapak ve bölüm ayracı koyu, içerik slaytları açık zemindedir.
+
+### Yerleşim — metin çakışmasını önleme
+
+Alt başlık, başlığa **sabit dikey ofsetle değil**, başlık kutusunun alt kenarına göre konumlandırılır. Başlık kutusu için her zaman iki satırlık yükseklik ayrılır. Başlık 45 karakteri aşarsa metin kısaltılır — punto küçültülmez. Bu kural, başlığın iki satıra taşıp alt başlığın üstüne binmesini önlemek için eklendi.
 
 ### Tipografi
 
@@ -262,7 +293,7 @@ Başlık **Georgia**, gövde **Calibri**. Başlık 28pt · bölüm 16pt · alt b
 
 ### Grafikler
 
-İzin verilen: **bar, yatay bar, tablo.** Yasak: **pasta, halka, 3D, radar, alan.** Oran göstermek için yatay bar kullanılır — gözle kıyaslaması pastadan kolaydır. Seri rengi tek: `#D97706` ya da `#0F766E`; ızgara `#E2E8F0`.
+İzin verilen: **bar, yatay bar, tablo, KPI kutusu.** Yasak: **pasta, halka, 3D, radar, alan.** Oran göstermek için yatay bar kullanılır — gözle kıyaslaması pastadan kolaydır. Seri rengi tek: `#D97706` ya da `#0F766E`; ızgara `#E2E8F0`.
 
 ### Yoğunluk
 

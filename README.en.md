@@ -11,6 +11,7 @@ An MCP server that pulls presentation-ready data out of product and category pag
 | `get_category_presentation_data` | Featured product list from a category page |
 | `extract_seller_trust_signals` | Seller rating, who ships it, return policy + a reasoned decision summary |
 | `get_presentation_style_guide` | The pinned deck palette, typography and chart rules |
+| **`analyze_category`** | **Category plus every product in one call** — the recommended entry point for decks |
 
 Live server: **https://ecommerce-insight-mcp.onrender.com**
 
@@ -35,6 +36,7 @@ curl "https://ecommerce-insight-mcp.onrender.com/api/product?url=https://example
 curl "https://ecommerce-insight-mcp.onrender.com/api/schema?url=https://example.com/product"
 curl "https://ecommerce-insight-mcp.onrender.com/api/category?url=https://example.com/category"
 curl "https://ecommerce-insight-mcp.onrender.com/api/seller?url=https://example.com/product"
+curl "https://ecommerce-insight-mcp.onrender.com/api/analyze?url=https://example.com/category&limit=8"
 ```
 
 To check whether the server is up:
@@ -236,6 +238,31 @@ Empty fields under `json_ld` **do not mean the seller is weak**; they mean the s
 
 ---
 
+## Staying under the tool-use limit
+
+Calling `extract_*` once per product fills a client's tool-use budget. An eight-product analysis used to mean **25 tool calls and ~66,000 tokens**, most of it raw JSON-LD (23 KB for a single product, 8 KB of which was `hasVariant`).
+
+Two changes fixed it:
+
+**1. `analyze_category` — one call.** Fetches the category and its products concurrently and returns only the fields a deck needs.
+
+```bash
+curl -s "http://localhost:8000/api/analyze?url=<CATEGORY_URL>&limit=8" | python -m json.tool
+```
+
+**2. Raw schema is trimmed.** `extract_structured_product_schema` now returns `key_facts` (name, brand, price, rating, review count, availability) and strips `hasVariant`, `isRelatedTo` and `additionalProperty` from the raw schema.
+
+Measured:
+
+| | Before | After |
+|---|---|---|
+| Schema tool (one product) | 23,474 chars (~6,700 tokens) | 4,983 chars (~1,423 tokens) |
+| Eight-product category analysis | 25 calls, ~66,000 tokens | **1 call, ~1,261 tokens** |
+
+`summary.average_rating` is computed only from products that **actually have reviews**, and `rated_product_count` says how many that was. A product with no reviews reports a rating of 0, which must not drag the average down.
+
+---
+
 ## Presentation design system
 
 To keep every deck looking the same, the palette, typography and chart rules are pinned in the server. They were measured from an approved reference deck.
@@ -247,10 +274,14 @@ To keep every deck looking the same, the palette, typography and chart rules are
 | Surface | `#FFFFFF` · `#F1F5F9` · `#F7F5F2` |
 | Border | `#E2E8F0` · `#CBD5E1` |
 | Text | `#1E293B` · `#334155` · `#6B7280` · `#94A3B8` |
-| **Accent (primary)** | **`#D97706`** |
-| **Accent (secondary)** | **`#0F766E`** |
+| Dark surface | `#1E293B` · `#24334A` |
+| **Accent set** | **`#D97706`** amber · **`#0F766E`** teal · **`#DC5F4E`** terracotta · **`#15803D`** green |
 
-At most **two accent colours per deck**. No blues.
+Where categories need distinguishing, the accent set is used **in order**; no fifth colour. There are no blues — the navy is a surface and text colour, never an accent. Cover and section slides are dark, content slides light.
+
+### Layout — preventing text collisions
+
+The subtitle is positioned relative to the **bottom edge of the title box**, never at a fixed vertical offset, and the title box always reserves two lines of height. If a title exceeds 45 characters the text is shortened — the point size is not reduced. This rule exists because a two-line title was overlapping the subtitle beneath it.
 
 ### Typography
 
@@ -258,7 +289,7 @@ Headings **Georgia**, body **Calibri**. Title 28pt · section 16pt · subhead 13
 
 ### Charts
 
-Allowed: **bar, horizontal bar, table.** Forbidden: **pie, doughnut, 3D, radar, area.** Proportions are shown with horizontal bars, which are easier to compare by eye than pie slices. One series colour: `#D97706` or `#0F766E`; gridlines `#E2E8F0`.
+Allowed: **bar, horizontal bar, table, KPI tile.** Forbidden: **pie, doughnut, 3D, radar, area.** Proportions are shown with horizontal bars, which are easier to compare by eye than pie slices. One series colour: `#D97706` or `#0F766E`; gridlines `#E2E8F0`.
 
 ### Density
 
