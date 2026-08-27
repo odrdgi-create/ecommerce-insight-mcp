@@ -11,7 +11,8 @@ An MCP server that pulls presentation-ready data out of product and category pag
 | `get_category_presentation_data` | Featured product list from a category page |
 | `extract_seller_trust_signals` | Seller rating, who ships it, return policy + a reasoned decision summary |
 | `get_presentation_style_guide` | The pinned deck palette, typography and chart rules |
-| **`analyze_category`** | **Category plus every product in one call** — the recommended entry point for decks |
+| **`analyze_category`** | **Several marketplaces' categories plus every product in one call** — the entry point for decks |
+| **`build_slide_visual`** | **On-theme SVG visuals**: journey map, donut, waffle, positioning map, ranked bars |
 
 Live server: **https://ecommerce-insight-mcp.onrender.com**
 
@@ -250,6 +251,16 @@ Two changes fixed it:
 curl -s "http://localhost:8000/api/analyze?url=<CATEGORY_URL>&limit=8" | python -m json.tool
 ```
 
+**Several marketplaces in one call.** `url` accepts a comma-separated list; every product carries the marketplace it came from:
+
+```bash
+curl -s -G "http://localhost:8000/api/analyze" \
+  --data-urlencode "url=https://www.trendyol.com/<category>,https://www.hepsiburada.com/ara?q=<term>,https://www.amazon.com.tr/s?k=<term>" \
+  --data-urlencode "limit=4" | python -m json.tool
+```
+
+Measured: three marketplaces, 12 products, **7.3 seconds, one call**. A source that cannot be read appears in `sources` with its error while the others continue; if none can be read the tool returns an error.
+
 **2. Raw schema is trimmed.** `extract_structured_product_schema` now returns `key_facts` (name, brand, price, rating, review count, availability) and strips `hasVariant`, `isRelatedTo` and `additionalProperty` from the raw schema.
 
 Measured:
@@ -260,6 +271,64 @@ Measured:
 | Eight-product category analysis | 25 calls, ~66,000 tokens | **1 call, ~1,261 tokens** |
 
 `summary.average_rating` is computed only from products that **actually have reviews**, and `rated_product_count` says how many that was. A product with no reviews reports a rating of 0, which must not drag the average down.
+
+---
+
+## Slide visuals
+
+`build_slide_visual` renders deck visuals **inside the theme**: colour and typeface are not left to the caller, they come from the pinned palette. The SVG is self-contained (no external fonts or assets) and embeds into both HTML decks and PowerPoint.
+
+| Kind | For |
+|---|---|
+| `journey_map` | Customer journey — stages, each with a metric and a note |
+| `donut` | Single-metric rings — the modern stand-in for a pie |
+| `quadrant` | Price–rating positioning; bubble size is the review count |
+| `waffle` | 100-square proportion grid — the readable alternative to a pie |
+| `ranked_bars` | Horizontal bars sorted largest to smallest |
+
+```bash
+curl -s -G "http://localhost:8000/api/visual" \
+  --data-urlencode "kind=donut" \
+  --data-urlencode 'data={"rings":[{"label":"Average rating","value":4.2,"max":5,"display":"4.2","caption":"from 3 products"}]}' \
+  --data-urlencode "title=Category health" > visual.svg
+```
+
+### The pie rule, deliberately revised
+
+The design system originally banned **all** pie and doughnut charts. That rule has been refined:
+
+- **Still banned:** multi-slice pies (`multi_slice_pie`) and multi-series doughnuts. Readers cannot compare slice angles by eye — that was the real problem.
+- **Now allowed:** the single-metric ring (`donut`). It shows one proportion, so no comparison problem arises; this is what modern deck tools use for KPIs.
+- **For proportions:** `waffle`. Readers count squares instead of estimating angles.
+
+### Skewed price data
+
+Pass `"x_scale": "log"` for the price axis of a `quadrant`. Category prices are typically skewed (1,290 TL alongside 44,500 TL); on a linear axis the points pile up on the left, while a log axis separates the segments. The axis label gains a "(log ölçek)" note automatically.
+
+---
+
+## The conclusion section is mandatory
+
+Every deck ends with an **"AI summary and conclusion"** slide. Showing data without interpreting it leaves the inference to the reader.
+
+The **`findings`** array from `analyze_category` is the raw material for it — observations derived straight from the data and checkable by hand:
+
+```
+* 7 of 12 products have no reviews at all; the category average was computed
+  only from products that do.
+* Prices run 1,290 TL – 68,500 TL; the dearest is 53x the cheapest.
+  This is not a single segment.
+* 'Rosem Ahsap' is the seller on 4 of the listed products — seller concentration.
+* 4 products are shipped by the seller; delivery and returns depend on them.
+```
+
+Rules for the slide (`get_presentation_style_guide` → `conclusion`):
+
+- Dark surface (`#1E293B`), the **last** slide of the deck.
+- A 2-3 sentence summary paragraph first, then 3-4 numbered, actionable recommendations.
+- Every recommendation states the finding it rests on: *"because X, do Y."*
+- The summary is derived only from `findings` and figures already shown — no invented data.
+- Any source that could not be read is called out explicitly.
 
 ---
 

@@ -11,7 +11,8 @@
 | `get_category_presentation_data` | Kategori sayfasından öne çıkan ürün listesi |
 | `extract_seller_trust_signals` | Satıcı puanı, kargoyu kimin yaptığı, iade durumu + gerekçeli karar özeti |
 | `get_presentation_style_guide` | Sabit sunum paleti, tipografi ve grafik kuralları |
-| **`analyze_category`** | **Kategori + tüm ürünleri tek çağrıda** — sunum için önerilen giriş noktası |
+| **`analyze_category`** | **Birden çok pazaryerinin kategorisi + tüm ürünler tek çağrıda** — sunum için giriş noktası |
+| **`build_slide_visual`** | **Tema-sadık SVG görseller**: yolculuk haritası, halka, waffle, konumlandırma, sıralı bar |
 
 Canlı sunucu: **https://ecommerce-insight-mcp.onrender.com**
 
@@ -254,6 +255,16 @@ Kategori analizi için ürün başına ayrı ayrı `extract_*` çağırmak clien
 curl -s "http://localhost:8000/api/analyze?url=<KATEGORİ_LİNKİ>&limit=8" | python -m json.tool
 ```
 
+**Birden çok pazaryeri tek çağrıda.** `url` virgülle ayrılmış birden çok adres alır; her ürün hangi pazaryerinden geldiğiyle döner:
+
+```bash
+curl -s -G "http://localhost:8000/api/analyze" \
+  --data-urlencode "url=https://www.trendyol.com/<kategori>,https://www.hepsiburada.com/ara?q=<terim>,https://www.amazon.com.tr/s?k=<terim>" \
+  --data-urlencode "limit=4" | python -m json.tool
+```
+
+Ölçüldü: üç pazaryeri, 12 ürün, **7.3 saniye, tek çağrı**. Bir kaynak okunamazsa `sources` içinde hatasıyla görünür ve diğerleri devam eder; hiçbiri okunamazsa araç hata döndürür.
+
 **2. Ham şema budandı.** `extract_structured_product_schema` artık `key_facts` (ad, marka, fiyat, puan, yorum sayısı, stok) döndürüyor; ham şemadan `hasVariant`, `isRelatedTo`, `additionalProperty` gibi alanlar çıkarılıyor.
 
 Ölçülen fark:
@@ -264,6 +275,64 @@ curl -s "http://localhost:8000/api/analyze?url=<KATEGORİ_LİNKİ>&limit=8" | py
 | 8 ürünlük kategori analizi | 25 çağrı, ~66.000 token | **1 çağrı, ~1.261 token** |
 
 `analyze_category` çıktısındaki `summary.average_rating` yalnızca **yorumu olan** ürünlerden hesaplanır; kaç ürüne dayandığı `rated_product_count` alanında verilir. Yorum almamış ürünün `0` puanı ortalamaya katılmaz.
+
+---
+
+## Slayt görselleri
+
+`build_slide_visual` sunum görsellerini **tema içinde** üretir: renk ve yazı tipi seçimi çağırana bırakılmaz, hepsi sabit paletten gelir. Dönen SVG kendi kendine yeter (harici font/asset yok) ve hem HTML sunumlara hem PowerPoint'e gömülebilir.
+
+| Tip | Ne için |
+|---|---|
+| `journey_map` | Müşteri yolculuğu haritası — aşamalar, her aşamada ölçü ve not |
+| `donut` | Tek ölçülü halka göstergeleri — çok dilimli pastanın modern karşılığı |
+| `quadrant` | Fiyat–puan konumlandırma; daire büyüklüğü yorum sayısı |
+| `waffle` | 100 kareli oran ızgarası — pastanın okunabilir alternatifi |
+| `ranked_bars` | Büyükten küçüğe sıralı yatay bar |
+
+```bash
+curl -s -G "http://localhost:8000/api/visual" \
+  --data-urlencode "kind=donut" \
+  --data-urlencode 'data={"rings":[{"label":"Ortalama puan","value":4.2,"max":5,"display":"4.2","caption":"3 üründen"}]}' \
+  --data-urlencode "title=Kategori Sağlık Göstergeleri" > gorsel.svg
+```
+
+### Pasta grafik kuralı — bilinçli revizyon
+
+Tasarım sistemi önce **tüm pasta ve halka grafikleri** yasaklıyordu. Bu kural şöyle inceltildi:
+
+- **Yasak kalan:** çok dilimli pasta (`multi_slice_pie`) ve çok serili halka. Okuyucu dilim açılarını gözle kıyaslayamaz — asıl sorun buydu.
+- **Serbest olan:** tek ölçülü halka (`donut`). Tek bir oranı gösterir, kıyaslama sorunu doğurmaz; modern sunum araçlarının KPI göstergesi budur.
+- **Oran dağılımı için:** `waffle`. Okuyucu kare sayar, açı tahmin etmez.
+
+### Çarpık fiyat verisi
+
+`quadrant` görselinde fiyat ekseni için `"x_scale": "log"` verin. Kategori fiyatları tipik olarak çarpık dağılır (1.290 TL ile 44.500 TL bir arada); doğrusal eksende noktalar sola yığılır, logaritmik eksen segmentleri ayırır. Eksen etiketine "(log ölçek)" notu otomatik eklenir.
+
+---
+
+## Sonuç bölümü zorunludur
+
+Sunum, **"Yapay Zekâ Özeti ve Sonuç"** slaytıyla biter. Veriyi gösterip yorumsuz bırakmak, çıkarımı okuyucuya bırakmak demektir.
+
+`analyze_category` çıktısındaki **`findings`** bu bölümün ham maddesidir — veriden doğrudan türetilmiş, elle doğrulanabilir gözlemler:
+
+```
+* 12 üründen 7 tanesinin hiç yorumu yok; kategori ortalaması yalnızca
+  yorumu olan ürünlerden hesaplandı.
+* Fiyat aralığı 1.290 TL – 68.500 TL; en pahalı ürün en ucuzun 53 katı.
+  Kategori tek bir segment değil.
+* 'Rosem Ahsap' listedeki 4 üründe satıcı konumunda — satıcı yoğunlaşması var.
+* 4 üründe kargoyu satıcı kendi yapıyor; teslimat ve iade deneyimi satıcıya bağlı.
+```
+
+Sonuç slaytının kuralları (`get_presentation_style_guide` → `conclusion`):
+
+- Koyu zeminde (`#1E293B`), sunumun **son** slaytı.
+- Önce 2-3 cümlelik özet paragrafı, ardından 01-04 numaralı 3-4 eyleme dönük öneri.
+- Her öneri hangi bulguya dayandığını söyler: *"X olduğu için Y yap."*
+- Özet yalnızca `findings` ve sunumda gösterilen sayılardan türetilir — yeni veri uydurulmaz.
+- Okunamayan kaynak varsa sonuçta açıkça belirtilir.
 
 ---
 
