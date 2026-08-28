@@ -95,6 +95,86 @@ def _frame(theme: dict, body: str, dark: bool = False) -> str:
 # --- GÖRSEL TİPLERİ ---
 
 
+def cover(theme: dict, data: dict, title: str, subtitle: str, note: str) -> str:
+    """Kapak slaytı: koyu zemin, sıcak vurgu, büyük serif başlık.
+
+    Sunumun ilk slaytı elle kurulduğunda tema kaymasına ve kimi zaman hiç
+    üretilmemesine yol açıyordu; kapak da diğer görseller gibi araçla üretilir.
+
+    data: {"eyebrow": "PAZAR ARAŞTIRMASI", "stats": [{"value": "8", "label": "ürün incelendi"}], "reference": "kedi-evi-x-c103577"}
+    """
+    palette, accents = theme["palette"], _accent_list(theme)
+    heading_font, body_font = _fonts(theme)
+    primary = accents[0]
+
+    parts = []
+
+    # Sağ üstte iki saydam kare: referans kapaktaki sakin geometrik vurgu.
+    parts.append(
+        f'<rect x="880" y="96" width="300" height="250" rx="26" '
+        f'fill="{accents[1 % len(accents)]}" opacity="0.16"/>'
+        f'<rect x="1000" y="250" width="240" height="260" rx="26" '
+        f'fill="{primary}" opacity="0.16"/>'
+    )
+
+    eyebrow = data.get("eyebrow") or "PAZAR ARAŞTIRMASI"
+    parts.append(
+        f'<text x="72" y="196" font-family="{body_font}" font-size="16" '
+        f'font-weight="700" letter-spacing="4" fill="{primary}">'
+        f"{_clip(eyebrow, 34)}</text>"
+    )
+
+    # Başlık iki satıra kadar sarılır; alt başlık sabit ofsetle değil,
+    # başlığın gerçek satır sayısına göre konumlanır.
+    lines = _wrap(title, 26)[:2]
+    y = 268
+    for line in lines:
+        parts.append(
+            f'<text x="72" y="{y}" font-family="{heading_font}" font-size="54" '
+            f'font-weight="700" fill="{palette["text_on_dark"]}">{escape(line)}</text>'
+        )
+        y += 64
+
+    if subtitle:
+        parts.append(
+            f'<text x="72" y="{y + 30}" font-family="{body_font}" font-size="22" '
+            f'fill="{palette["text_faint"]}">{_clip(subtitle, 62)}</text>'
+        )
+
+    stats = (data.get("stats") or [])[:3]
+    if stats:
+        x = 72
+        for index, stat in enumerate(stats):
+            if index:
+                parts.append(
+                    f'<text x="{x:.0f}" y="{HEIGHT - 56}" font-family="{body_font}" '
+                    f'font-size="17" fill="{palette["text_faint"]}">|</text>'
+                )
+                x += 24
+            value = _clip(stat.get("value"), 12)
+            label = _clip(stat.get("label"), 26)
+            parts.append(
+                f'<text x="{x:.0f}" y="{HEIGHT - 56}" font-family="{heading_font}" '
+                f'font-size="19" font-weight="700" fill="{primary}">{value}</text>'
+            )
+            # Serif rakamın genişliğini kestirerek etiketi yanına koy.
+            x += 11 * len(str(stat.get("value") or "")) + 10
+            parts.append(
+                f'<text x="{x:.0f}" y="{HEIGHT - 56}" font-family="{body_font}" '
+                f'font-size="17" fill="{palette["text_faint"]}">{label}</text>'
+            )
+            x += 8 * len(str(stat.get("label") or "")) + 18
+
+    if data.get("reference"):
+        parts.append(
+            f'<text x="72" y="{HEIGHT - 26}" font-family="{body_font}" font-size="15" '
+            f'font-style="italic" fill="{palette["text_muted"]}">'
+            f"{_clip(data['reference'], 74)}</text>"
+        )
+
+    return _frame(theme, "\n".join(parts), dark=True)
+
+
 def journey_map(theme: dict, data: dict, title: str, subtitle: str, note: str) -> str:
     """Müşteri yolculuğu haritası: aşamalar, her aşamada ölçü ve not.
 
@@ -497,6 +577,7 @@ def _wrap(text: Any, width: int) -> list[str]:
 
 
 BUILDERS = {
+    "cover": cover,
     "journey_map": journey_map,
     "donut": donut,
     "quadrant": quadrant,

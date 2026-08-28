@@ -284,6 +284,7 @@ curl -s -G "http://localhost:8000/api/analyze" \
 
 | Tip | Ne için |
 |---|---|
+| `cover` | **Kapak slaytı** — koyu zemin, sıcak vurgu, büyük serif başlık. Sunumun ilk slaytı bununla üretilir |
 | `journey_map` | Müşteri yolculuğu haritası — aşamalar, her aşamada ölçü ve not |
 | `donut` | Tek ölçülü halka göstergeleri — çok dilimli pastanın modern karşılığı |
 | `quadrant` | Fiyat–puan konumlandırma; daire büyüklüğü yorum sayısı |
@@ -308,6 +309,27 @@ Tasarım sistemi önce **tüm pasta ve halka grafikleri** yasaklıyordu. Bu kura
 ### Çarpık fiyat verisi
 
 `quadrant` görselinde fiyat ekseni için `"x_scale": "log"` verin. Kategori fiyatları tipik olarak çarpık dağılır (1.290 TL ile 44.500 TL bir arada); doğrusal eksende noktalar sola yığılır, logaritmik eksen segmentleri ayırır. Eksen etiketine "(log ölçek)" notu otomatik eklenir.
+
+### Geçici bloklar ve yeniden deneme
+
+Bot korumaları `403/429/503`'ü çoğu zaman **kalıcı yasak değil, anlık hız sınırı** olarak döndürür — aynı adres saniyeler sonra 200 verebilir. Önceden tek denemede pes ediliyordu ve bir pazaryeri sunumdan tamamen düşüyordu.
+
+Artık engellenen statülerde **artan beklemeyle 3 deneme** yapılıyor (1,5 sn → 3 sn). Geçici bloklar kurtarılıyor; kalıcı olanlar yine hata döndürüyor ve `sources` içinde görünüyor.
+
+Ölçülen davranış farkı — aynı anda çalıştırılan testlerde:
+
+| Kaynak | Yerel makine | Render (bulut) |
+|---|---|---|
+| Trendyol | çalışıyor | **0 ürün** (IP bazlı içerik ayrımı) |
+| Hepsiburada | çalışıyor | çalışıyor |
+| Amazon.com.tr | 503 (kalıcı, bu IP'den) | çalışıyor |
+| N11 | çalışıyor | çalışıyor |
+
+İki ortam birbirinin tersini yaşayabiliyor: **Trendyol yerelde, diğerleri bulutta daha güvenilir.** Kapsamlı bir karşılaştırma için ikisini birlikte kullanmak gerekebilir.
+
+### Arama sonucu alaka sorunu
+
+`analyze_category`'ye arama adresi verdiğinizde pazaryerinin kendi sıralaması geçerlidir. Örneğin N11'de `fujifilm fotograf makinesi` araması film, çanta ve tripod gibi aksesuarları öne çıkarabiliyor. Bu bir engelleme değil, alaka sorunudur — daha dar bir arama adresi (marka filtresi uygulanmış kategori linki) belirgin biçimde daha temiz sonuç verir.
 
 ---
 

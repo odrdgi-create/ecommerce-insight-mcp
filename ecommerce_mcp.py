@@ -230,7 +230,17 @@ async def _fetch_html_playwright(url: str) -> str:
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
             )
             page = await context.new_page()
-            await page.goto(url, timeout=20_000, wait_until="domcontentloaded")
+            try:
+                await page.goto(url, timeout=20_000, wait_until="domcontentloaded")
+            except Exception as e:
+                # Bazı siteler bot şüphesinde sayfa yerine dosya indirmesi
+                # tetikliyor; Playwright'ın ham hatası bunu anlatmıyor.
+                if "Download is starting" in str(e):
+                    raise RuntimeError(
+                        "Site sayfa yerine dosya indirmesi başlattı — bot koruması "
+                        "devrede. Farklı bir arama adresi deneyin."
+                    ) from e
+                raise
             # Ürün kartları çoğu e-ticaret sitesinde DOMContentLoaded'dan sonra
             # render ediliyor; ağ sakinleşene kadar kısa bir pay tanı.
             try:
@@ -241,6 +251,31 @@ async def _fetch_html_playwright(url: str) -> str:
             return html
         finally:
             await browser.close()
+
+
+# Bot korumaları 403/429/503'ü çoğu zaman kalıcı yasak olarak değil, anlık
+# hız sınırı olarak döndürüyor: aynı adres saniyeler sonra 200 verebiliyor.
+# Tek denemede pes etmek, bir kaynağı sunumdan tamamen düşürüyordu.
+_RETRY_ATTEMPTS = 3
+_RETRY_BASE_DELAY = 1.5
+
+
+async def _fetch_html_with_retry(url: str) -> str:
+    """Engellenen statülerde artan bekleme ile yeniden dener."""
+    delay = _RETRY_BASE_DELAY
+    for attempt in range(_RETRY_ATTEMPTS):
+        try:
+            return await _fetch_html_primary(url)
+        except httpx.HTTPStatusError as e:
+            last_attempt = attempt == _RETRY_ATTEMPTS - 1
+            if e.response.status_code not in _BLOCKED_STATUS_CODES or last_attempt:
+                raise
+        except httpx.TimeoutException:
+            if attempt == _RETRY_ATTEMPTS - 1:
+                raise
+        await asyncio.sleep(delay)
+        delay *= 2
+    raise RuntimeError("Yeniden deneme döngüsü beklenmedik biçimde sonlandı.")
 
 
 async def _fetch_soup(url: str) -> tuple[BeautifulSoup, str | None]:
@@ -255,7 +290,7 @@ async def _fetch_soup(url: str) -> tuple[BeautifulSoup, str | None]:
 
     warning = None
     try:
-        html = await _fetch_html_primary(url)
+        html = await _fetch_html_with_retry(url)
         if _looks_blocked(html):
             if playwright_available():
                 html = await _fetch_html_playwright(url)
@@ -551,12 +586,14 @@ PRESENTATION_STYLE = {
         "Dekoratif görsel eklenmez. Görsel yalnızca ürün fotoğrafı olarak kullanılır.",
         "Her slaytta kaynak satırı bulunur (9pt, #6B7280).",
         "Sunum, yapay zekâ özeti ve sonuç slaytıyla biter — bu bölüm zorunludur.",
+        "Sunum kapak slaytıyla başlar; kapak da build_slide_visual ile üretilir "
+        "(kind='cover'), elle kurulmaz.",
     ],
     "charts": {
         # build_slide_visual aracıyla üretilebilen tema-sadık görseller.
         "allowed": [
             "bar", "horizontal_bar", "table", "kpi_tile",
-            "ranked_bars", "donut", "waffle", "quadrant", "journey_map",
+            "cover", "ranked_bars", "donut", "waffle", "quadrant", "journey_map",
         ],
         # Yasak olan çok dilimli pasta; okuyucu dilim açılarını gözle
         # kıyaslayamaz. Tek ölçülü halka (donut) buna girmez: tek bir oranı
@@ -573,7 +610,7 @@ PRESENTATION_STYLE = {
     # o veriden ne çıktığını söyler. Veri gösterip yorumsuz bırakmak sunumu
     # okuyucunun kendi çıkarımına terk eder.
     "required_sections": [
-        "Kapak (koyu zemin)",
+        "Kapak (ZORUNLU, ilk slayt — build_slide_visual kind='cover')",
         "Kategori özeti — KPI kutuları",
         "Fiyat karşılaştırması — yatay bar",
         "Ürün / satıcı bulguları",
@@ -1216,8 +1253,10 @@ def sunum_hazirla(url: str) -> str:
         "Amazon /s?k=... gibi). Tek pazaryerine sıkışma.\n"
         "2. get_presentation_style_guide aracını çağır ve döndürdüğü tasarım "
         "sistemine harfiyen uy.\n"
-        "3. Grafikleri elle çizme; build_slide_visual aracıyla üret. Renk ve "
-        "yazı tipi paletten gelir. Kategori analizi için önerilen görseller: "
+        "3. Grafikleri VE KAPAĞI elle çizme; build_slide_visual aracıyla üret. "
+        "Renk ve yazı tipi paletten gelir. İlk slayt her zaman kind='cover' ile "
+        "üretilir — kapaksız sunum teslim etme. Kategori analizi için önerilen "
+        "görseller: "
         "'donut' (kategori sağlık göstergeleri), 'ranked_bars' (fiyat "
         "karşılaştırması), 'quadrant' (fiyat–puan konumlandırma, fiyat için "
         "x_scale='log'), 'waffle' (yorumu olan/olmayan ürün oranı), "
@@ -1363,6 +1402,8 @@ async def build_slide_visual(
 
     kind seçenekleri ve `data` (JSON metni) biçimleri:
 
+    - "cover"        — kapak slaytı (koyu zemin); sunumun ilk slaytı bununla üretilir
+      {"eyebrow":"PAZAR ARAŞTIRMASI","stats":[{"value":"10","label":"ürün incelendi"}],"reference":"kategori-linki"}
     - "journey_map"  — müşteri yolculuğu haritası
       {"stages":[{"label":"Keşif","value":"3.672","note":"..."}]}
     - "donut"        — tek ölçülü halka göstergeleri (çok dilimli pastanın yerine)

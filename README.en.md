@@ -280,6 +280,7 @@ Measured:
 
 | Kind | For |
 |---|---|
+| `cover` | **Cover slide** — dark surface, warm accent, large serif title. The deck's first slide is built with this |
 | `journey_map` | Customer journey — stages, each with a metric and a note |
 | `donut` | Single-metric rings — the modern stand-in for a pie |
 | `quadrant` | Price–rating positioning; bubble size is the review count |
@@ -304,6 +305,27 @@ The design system originally banned **all** pie and doughnut charts. That rule h
 ### Skewed price data
 
 Pass `"x_scale": "log"` for the price axis of a `quadrant`. Category prices are typically skewed (1,290 TL alongside 44,500 TL); on a linear axis the points pile up on the left, while a log axis separates the segments. The axis label gains a "(log ölçek)" note automatically.
+
+### Transient blocks and retries
+
+Bot protections usually return `403/429/503` as a **momentary rate limit, not a permanent ban** — the same URL can answer 200 seconds later. Previously a single attempt was made, so one marketplace could drop out of the deck entirely.
+
+Blocked statuses are now retried **3 times with growing backoff** (1.5s → 3s). Transient blocks recover; persistent ones still return an error and show up in `sources`.
+
+Measured behaviour, from tests run at the same time:
+
+| Source | Local machine | Render (cloud) |
+|---|---|---|
+| Trendyol | works | **0 products** (IP-based content difference) |
+| Hepsiburada | works | works |
+| Amazon.com.tr | 503 (persistent, from this IP) | works |
+| N11 | works | works |
+
+The two environments can be each other's opposite: **Trendyol is more reliable locally, the others in the cloud.** A thorough comparison may need both.
+
+### Search relevance
+
+When you hand `analyze_category` a search URL, the marketplace's own ranking applies. On N11, for instance, a search for `fujifilm fotograf makinesi` can surface film, bags and tripods first. That is a relevance problem, not a block — a narrower URL (a category link with the brand filter applied) gives markedly cleaner results.
 
 ---
 
