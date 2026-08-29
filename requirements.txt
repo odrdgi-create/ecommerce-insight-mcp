@@ -9,6 +9,9 @@ curl_cffi==0.16.2
 uvicorn==0.52.1
 
 # Playwright yedeği yalnızca yerel kurulumda kullanılır.
-# Render'da ENABLE_PLAYWRIGHT=0 ayarlıdır; bulutta bu satırı açmayın
-# (Chromium binary'si + ~400MB RAM gerekir, free tier'da OOM olur).
+# Render'da kurulu değildir ve kod bunu kendiliğinden tespit eder; bulutta bu
+# satırı açmayın (Chromium binary'si + ~400MB RAM gerekir, free tier'da OOM olur).
 # Yerelde:  pip install playwright==1.62.0 && playwright install chromium
+#
+# Ayarlar: ENABLE_PLAYWRIGHT=0 kapatır, PLAYWRIGHT_MAX_CONCURRENCY eşzamanlı
+# sayfa sayısını sınırlar (varsayılan 2).

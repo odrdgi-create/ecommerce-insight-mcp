@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import functools
 import ipaddress
 import json
@@ -211,46 +212,136 @@ async def _fetch_html_primary(url: str) -> str:
     return await _fetch_html_httpx(url)
 
 
-async def _fetch_html_playwright(url: str) -> str:
-    """Yedek yol: gerçek bir headless tarayıcı ile sayfayı çek."""
-    from playwright.async_api import async_playwright
+# Playwright ayarları. Eşzamanlılık bilinçli olarak düşük: her sayfa ayrı bir
+# tarayıcı bağlamı açıyor ve Chromium bellek açısından pahalı.
+PLAYWRIGHT_MAX_CONCURRENCY = int(os.getenv("PLAYWRIGHT_MAX_CONCURRENCY", "2"))
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        try:
+# Not: görsel/font engelleme denendi ve ÖLÇÜLEREK ÇIKARILDI. Hem route("**/*")
+# ile resource_type kontrolü hem de uzantı deseniyle engelleme, Trendyol ürün
+# sayfasında süreyi 3,5 sn'den 7,4 sn'ye çıkardı. Sebep: iptal edilen istekler
+# yüzünden networkidle hiç oturmuyor ve her çağrıda 6 sn'lik zaman aşımı
+# yanıyor. Tasarruf edilen bant genişliği bu maliyeti karşılamıyor.
+
+# Otomasyon izlerini silen başlangıç betiği. navigator.webdriver tek başına
+# yetmiyor: bot korumaları dil listesi, eklenti sayısı ve chrome nesnesinin
+# varlığına da bakıyor.
+_STEALTH_SCRIPT = """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+Object.defineProperty(navigator, 'languages', {get: () => ['tr-TR', 'tr', 'en-US']});
+Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+window.chrome = window.chrome || {runtime: {}};
+const query = window.navigator.permissions && window.navigator.permissions.query;
+if (query) {
+  window.navigator.permissions.query = (p) =>
+    p && p.name === 'notifications'
+      ? Promise.resolve({state: Notification.permission})
+      : query(p);
+}
+"""
+
+
+class _BrowserPool:
+    """Tek bir Chromium örneğini tüm istekler arasında paylaşır.
+
+    Önceki sürüm her çağrıda tarayıcı açıp kapatıyordu; bu, istek başına ~2
+    saniye sabit maliyet ve sekiz ürünlük bir analizde sekiz ayrı Chromium
+    süreci demekti. Tarayıcı paylaşılıyor, izolasyon ise istek başına yeni
+    bağlam (context) açılarak sağlanıyor — çerezler istekler arasında sızmaz.
+    """
+
+    def __init__(self) -> None:
+        self._playwright = None
+        self._browser = None
+        self._launch_lock = asyncio.Lock()
+        self._semaphore = asyncio.Semaphore(max(1, PLAYWRIGHT_MAX_CONCURRENCY))
+
+    def is_running(self) -> bool:
+        return bool(self._browser and self._browser.is_connected())
+
+    async def _ensure_browser(self):
+        """Tarayıcıyı gerekirse başlatır; çökmüşse yeniden ayağa kaldırır."""
+        if self.is_running():
+            return self._browser
+
+        async with self._launch_lock:
+            # Kilidi beklerken başka bir istek başlatmış olabilir.
+            if self.is_running():
+                return self._browser
+
+            from playwright.async_api import async_playwright
+
+            if self._playwright is None:
+                self._playwright = await async_playwright().start()
+
+            self._browser = await self._playwright.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                ],
+            )
+            return self._browser
+
+    async def fetch(self, url: str) -> str:
+        """Sayfayı headless tarayıcıyla çeker."""
+        async with self._semaphore:
+            browser = await self._ensure_browser()
             context = await browser.new_context(
                 user_agent=HEADERS["User-Agent"],
                 viewport={"width": 1366, "height": 768},
                 locale="tr-TR",
+                timezone_id="Europe/Istanbul",
             )
-            await context.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-            )
-            page = await context.new_page()
             try:
-                await page.goto(url, timeout=20_000, wait_until="domcontentloaded")
-            except Exception as e:
-                # Bazı siteler bot şüphesinde sayfa yerine dosya indirmesi
-                # tetikliyor; Playwright'ın ham hatası bunu anlatmıyor.
-                if "Download is starting" in str(e):
-                    raise RuntimeError(
-                        "Site sayfa yerine dosya indirmesi başlattı — bot koruması "
-                        "devrede. Farklı bir arama adresi deneyin."
-                    ) from e
-                raise
-            # Ürün kartları çoğu e-ticaret sitesinde DOMContentLoaded'dan sonra
-            # render ediliyor; ağ sakinleşene kadar kısa bir pay tanı.
+                await context.add_init_script(_STEALTH_SCRIPT)
+
+                page = await context.new_page()
+                try:
+                    await page.goto(url, timeout=20_000, wait_until="domcontentloaded")
+                except Exception as e:
+                    # Bazı siteler bot şüphesinde sayfa yerine dosya indirmesi
+                    # tetikliyor; Playwright'ın ham hatası bunu anlatmıyor.
+                    if "Download is starting" in str(e):
+                        raise RuntimeError(
+                            "Site sayfa yerine dosya indirmesi başlattı — bot "
+                            "koruması devrede. Farklı bir arama adresi deneyin."
+                        ) from e
+                    raise
+
+                # Ürün kartları çoğu e-ticaret sitesinde DOMContentLoaded'dan
+                # sonra render ediliyor; ağ sakinleşene kadar kısa bir pay tanı.
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=6_000)
+                except Exception:
+                    pass
+
+                return await page.content()
+            finally:
+                await context.close()
+
+    async def close(self) -> None:
+        """Sunucu kapanırken tarayıcıyı ve sürücüyü serbest bırakır."""
+        if self._browser:
             try:
-                await page.wait_for_load_state("networkidle", timeout=6_000)
+                await self._browser.close()
             except Exception:
                 pass
-            html = await page.content()
-            return html
-        finally:
-            await browser.close()
+            self._browser = None
+        if self._playwright:
+            try:
+                await self._playwright.stop()
+            except Exception:
+                pass
+            self._playwright = None
+
+
+_browser_pool = _BrowserPool()
+
+
+async def _fetch_html_playwright(url: str) -> str:
+    """Son çare: gerçek bir headless tarayıcı ile sayfayı çek."""
+    return await _browser_pool.fetch(url)
 
 
 # Bot korumaları 403/429/503'ü çoğu zaman kalıcı yasak olarak değil, anlık
@@ -1542,6 +1633,7 @@ async def health(request: Request) -> Response:
             "server": "E-Commerce HTML Summarizer",
             "impersonate": impersonate_available(),
             "playwright": playwright_available(),
+            "browser_running": _browser_pool.is_running(),
             "tools": sorted(_TOOL_ROUTES),
         }
     )
@@ -1598,8 +1690,9 @@ _INDEX_HTML = """<!doctype html>
   <p class="sub">Bir ürün ya da kategori linki yapıştırın, veriyi çekelim.</p>
 
   <div class="card">
-    <input id="url" type="url" placeholder="https://ornek.com/urun-linki" autocomplete="off">
+    <input id="url" type="text" placeholder="Ürün ya da kategori linki — virgülle birden çok pazaryeri" autocomplete="off">
     <div class="row">
+      <button data-tool="analyze">Kategori Analizi</button>
       <button data-tool="product">Ürün Detayı</button>
       <button data-tool="schema">Yapısal Veri</button>
       <button data-tool="category">Kategori</button>
@@ -1636,7 +1729,9 @@ _INDEX_HTML = """<!doctype html>
     const url = document.getElementById('url').value.trim();
     if (!url) { out.textContent = 'Önce bir link girin.'; return; }
     buttons.forEach(b => b.disabled = true);
-    out.textContent = 'Çekiliyor... (sunucu uykudaysa ilk istek 1 dakika sürebilir)';
+    out.textContent = tool === 'analyze'
+      ? 'Kategori ve içindeki ürünler çekiliyor, bu 30 saniyeyi bulabilir...'
+      : 'Çekiliyor... (sunucu uykudaysa ilk istek 1 dakika sürebilir)';
     try {
       const res = await fetch('/api/' + tool + '?url=' + encodeURIComponent(url));
       out.textContent = JSON.stringify(await res.json(), null, 2);
@@ -1659,6 +1754,22 @@ _INDEX_HTML = """<!doctype html>
 
 # ASGI/HTTP Uygulamasını Global Düzeyde Tanımlama (Render/Uvicorn için)
 app = mcp.http_app()
+
+# Paylaşılan Chromium sunucu kapanırken serbest bırakılmalı, yoksa süreç
+# arkada asılı kalabiliyor. FastMCP'nin kendi lifespan'ı sarmalanıyor.
+_fastmcp_lifespan = app.router.lifespan_context
+
+
+@contextlib.asynccontextmanager
+async def _lifespan_with_browser_cleanup(scope):
+    async with _fastmcp_lifespan(scope):
+        try:
+            yield
+        finally:
+            await _browser_pool.close()
+
+
+app.router.lifespan_context = _lifespan_with_browser_cleanup
 
 if __name__ == "__main__":
     mcp.run()

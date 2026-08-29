@@ -278,6 +278,43 @@ curl -s -G "http://localhost:8000/api/analyze" \
 
 ---
 
+## Playwright katmanı
+
+Playwright son çaredir: `curl_cffi` → `httpx` → **Playwright**. TLS taklidi bot korumalarının çoğunu zaten geçtiği için nadiren devreye girer, ama JavaScript ile render edilen sayfalarda gerekir. Yalnızca yerel kurulumda çalışır.
+
+### Paylaşılan tarayıcı
+
+Her çağrıda yeni bir Chromium açılıyordu — istek başına ~2 saniye sabit maliyet ve sekiz ürünlük bir analizde sekiz ayrı tarayıcı süreci. Artık **tek Chromium paylaşılıyor**; izolasyon istek başına yeni bağlam (context) açılarak sağlanıyor, çerezler istekler arasında sızmıyor.
+
+| | Süre |
+|---|---|
+| 5 ardışık çağrı, her seferinde yeni tarayıcı | 10,68 sn |
+| 5 ardışık çağrı, paylaşılan tarayıcı | **9,03 sn** (%15 kazanç) |
+| 8 eşzamanlı çağrı, 2'li semafor | 7,06 sn |
+
+Asıl kazanç eşzamanlılıkta: eski kod 8 paralel istekte 8 ayrı Chromium açardı ve dar bellekli ortamda OOM riski taşırdı. `PLAYWRIGHT_MAX_CONCURRENCY` (varsayılan 2) bunu sınırlar.
+
+### Dayanıklılık
+
+- **Çökme kurtarması:** tarayıcı ölürse bir sonraki çağrıda kendiliğinden yeniden başlar.
+- **Temiz kapanış:** sunucu kapanırken Chromium serbest bırakılır. Ölçüldü — süreç sayısı 0 → 3 → 0, sızıntı yok.
+- **İndirme tuzağı:** bazı siteler bot şüphesinde sayfa yerine dosya indirmesi tetikliyor; Playwright'ın ham hatası bunu anlatmadığı için açıklayıcı mesaja çevriliyor.
+- **Otomasyon izleri:** `navigator.webdriver` tek başına yetmiyor; dil listesi, eklenti sayısı, `window.chrome` ve permissions sorgusu da maskeleniyor.
+
+### Denenip çıkarılan: görsel/font engelleme
+
+Görsel, font ve medya isteklerini engellemek sezgisel olarak hızlandırmalıydı. **Ölçüm tersini söyledi** ve özellik çıkarıldı:
+
+| Yöntem | Trendyol ürün sayfası |
+|---|---|
+| Engelleme yok | **3,47 sn** |
+| `route("**/*")` + resource_type | 7,39 sn |
+| Uzantı deseni ile engelleme | 7,39 sn |
+
+İki nedenden: `route("**/*")` her isteği Python'a round-trip ettiriyor, ve daha önemlisi iptal edilen istekler yüzünden `networkidle` hiç oturmuyor — her çağrıda 6 saniyelik zaman aşımı yanıyor. Tasarruf edilen bant genişliği bu maliyeti karşılamıyor.
+
+---
+
 ## Slayt görselleri
 
 `build_slide_visual` sunum görsellerini **tema içinde** üretir: renk ve yazı tipi seçimi çağırana bırakılmaz, hepsi sabit paletten gelir. Dönen SVG kendi kendine yeter (harici font/asset yok) ve hem HTML sunumlara hem PowerPoint'e gömülebilir.

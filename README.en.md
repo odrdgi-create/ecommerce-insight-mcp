@@ -274,6 +274,43 @@ Measured:
 
 ---
 
+## The Playwright layer
+
+Playwright is the last resort: `curl_cffi` → `httpx` → **Playwright**. TLS impersonation already clears most bot protections, so it rarely runs, but it is needed for JavaScript-rendered pages. It only works in a local install.
+
+### Shared browser
+
+A fresh Chromium used to be launched on every call — roughly 2 seconds of fixed cost per request and eight separate browser processes for an eight-product analysis. A **single Chromium is now shared**; isolation comes from a fresh context per request, so cookies never leak between calls.
+
+| | Time |
+|---|---|
+| 5 sequential calls, new browser each time | 10.68 s |
+| 5 sequential calls, shared browser | **9.03 s** (15% faster) |
+| 8 concurrent calls, semaphore of 2 | 7.06 s |
+
+The real win is concurrency: the old code would have launched 8 separate Chromiums for 8 parallel requests, risking OOM on a small instance. `PLAYWRIGHT_MAX_CONCURRENCY` (default 2) caps it.
+
+### Robustness
+
+- **Crash recovery:** if the browser dies it relaunches on the next call.
+- **Clean shutdown:** Chromium is released when the server stops. Measured — process count 0 → 3 → 0, no leak.
+- **Download trap:** some sites start a file download instead of serving a page when they suspect a bot; Playwright's raw error does not say so, and it is translated into a clear message.
+- **Automation traces:** `navigator.webdriver` alone is not enough; the language list, plugin count, `window.chrome` and the permissions query are masked too.
+
+### Tried and removed: blocking images and fonts
+
+Blocking image, font and media requests should intuitively be faster. **Measurement said otherwise**, and the feature was removed:
+
+| Approach | Trendyol product page |
+|---|---|
+| No blocking | **3.47 s** |
+| `route("**/*")` + resource_type | 7.39 s |
+| Extension-pattern blocking | 7.39 s |
+
+Two reasons: `route("**/*")` round-trips every request through Python, and more importantly the aborted requests keep `networkidle` from ever settling, so each call burns the full 6-second timeout. The bandwidth saved does not pay for that.
+
+---
+
 ## Slide visuals
 
 `build_slide_visual` renders deck visuals **inside the theme**: colour and typeface are not left to the caller, they come from the pinned palette. The SVG is self-contained (no external fonts or assets) and embeds into both HTML decks and PowerPoint.
